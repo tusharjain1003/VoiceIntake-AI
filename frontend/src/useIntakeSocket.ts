@@ -6,6 +6,7 @@ type ConnectionStatus = "idle" | "connecting" | "connected" | "closed" | "error"
 interface UseIntakeSocketOptions {
   onMessage: (msg: WSServerMessage) => void;
   onStatusChange?: (status: ConnectionStatus) => void;
+  onTtsPlaying?: (playing: boolean) => void;
 }
 
 const WS_BASE = import.meta.env.VITE_WS_BASE_URL ?? "";
@@ -13,6 +14,7 @@ const WS_BASE = import.meta.env.VITE_WS_BASE_URL ?? "";
 export default function useIntakeSocket({
   onMessage,
   onStatusChange,
+  onTtsPlaying,
 }: UseIntakeSocketOptions) {
   const [status, setStatus] = useState<ConnectionStatus>("idle");
   const wsRef = useRef<WebSocket | null>(null);
@@ -20,6 +22,55 @@ export default function useIntakeSocket({
   onMessageRef.current = onMessage;
   const onStatusChangeRef = useRef(onStatusChange);
   onStatusChangeRef.current = onStatusChange;
+  const onTtsPlayingRef = useRef(onTtsPlaying);
+  onTtsPlayingRef.current = onTtsPlaying;
+
+  // TTS internal state
+  const ttsChunksRef = useRef<ArrayBuffer[]>([]);
+  const ttsContentTypeRef = useRef("audio/mpeg");
+  const expectingBinaryRef = useRef(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stopCurrentPlayback = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+      audioRef.current = null;
+    }
+    onTtsPlayingRef.current?.(false);
+  }, []);
+
+  const playTtsAudio = useCallback(
+    (chunks: ArrayBuffer[], contentType: string) => {
+      if (chunks.length === 0) return;
+
+      const blob = new Blob(chunks, { type: contentType });
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+
+      onTtsPlayingRef.current?.(true);
+
+      audio.addEventListener("ended", () => {
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        onTtsPlayingRef.current?.(false);
+      });
+
+      audio.addEventListener("error", () => {
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        onTtsPlayingRef.current?.(false);
+      });
+
+      audio.play().catch(() => {
+        URL.revokeObjectURL(url);
+        audioRef.current = null;
+        onTtsPlayingRef.current?.(false);
+      });
+    },
+    [],
+  );
 
   const setStatusSafe = useCallback((s: ConnectionStatus) => {
     setStatus(s);
@@ -29,6 +80,7 @@ export default function useIntakeSocket({
   const connect = useCallback(
     (sessionId: string) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) return;
+      stopCurrentPlayback();
 
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = WS_BASE
@@ -39,6 +91,7 @@ export default function useIntakeSocket({
       setStatusSafe("connecting");
 
       const ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
       wsRef.current = ws;
 
       ws.onopen = () => {
@@ -47,8 +100,37 @@ export default function useIntakeSocket({
       };
 
       ws.onmessage = (event) => {
+        // Binary data — TTS audio chunk (binaryType = "arraybuffer")
+        if (event.data instanceof ArrayBuffer) {
+          if (expectingBinaryRef.current) {
+            ttsChunksRef.current.push(event.data);
+          }
+          return;
+        }
+
+        // Text data — JSON
         try {
           const msg: WSServerMessage = JSON.parse(event.data);
+
+          if (msg.type === "tts_start") {
+            expectingBinaryRef.current = true;
+            ttsChunksRef.current = [];
+            ttsContentTypeRef.current = msg.content_type;
+            stopCurrentPlayback();
+            onMessageRef.current(msg);
+            return;
+          }
+
+          if (msg.type === "tts_end") {
+            expectingBinaryRef.current = false;
+            const chunks = ttsChunksRef.current;
+            const contentType = ttsContentTypeRef.current;
+            ttsChunksRef.current = [];
+            playTtsAudio(chunks, contentType);
+            onMessageRef.current(msg);
+            return;
+          }
+
           onMessageRef.current(msg);
         } catch {
           // skip unparseable messages
@@ -64,7 +146,7 @@ export default function useIntakeSocket({
         setStatusSafe("error");
       };
     },
-    [setStatusSafe],
+    [setStatusSafe, stopCurrentPlayback, playTtsAudio],
   );
 
   const sendText = useCallback((text: string) => {
@@ -75,6 +157,7 @@ export default function useIntakeSocket({
   }, []);
 
   const disconnect = useCallback(() => {
+    stopCurrentPlayback();
     const ws = wsRef.current;
     if (ws) {
       ws.send(JSON.stringify({ type: "stop" }));
@@ -82,7 +165,7 @@ export default function useIntakeSocket({
       wsRef.current = null;
     }
     setStatusSafe("idle");
-  }, [setStatusSafe]);
+  }, [setStatusSafe, stopCurrentPlayback]);
 
   useEffect(() => {
     return () => {

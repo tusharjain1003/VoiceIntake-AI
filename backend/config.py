@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     deepgram_language: str = "en"
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = ""
+    elevenlabs_model: str = "eleven_multilingual_v2"
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/voiceintake"
     log_level: str = "info"

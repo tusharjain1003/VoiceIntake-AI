@@ -78,6 +78,15 @@ export default function App() {
   );
 
   // Handle incoming WebSocket messages
+  const ttsActiveRef = useRef(false);
+
+  const handleTtsPlaying = useCallback((playing: boolean) => {
+    ttsActiveRef.current = playing;
+    if (!playing) {
+      setOrbState("listening");
+    }
+  }, []);
+
   const handleWsMessage = useCallback(
     (msg: WSServerMessage) => {
       if (msg.type === "session_id") {
@@ -93,11 +102,6 @@ export default function App() {
           text: msg.text,
         };
         setMessages((prev) => [...prev, aiMsg]);
-        // Briefly show speaking state then return to listening
-        setOrbState("speaking");
-        setTimeout(() => {
-          setOrbState((prev) => (prev === "speaking" ? "listening" : prev));
-        }, 800);
         return;
       }
 
@@ -125,8 +129,22 @@ export default function App() {
         return;
       }
 
+      if (msg.type === "tts_start") {
+        setOrbState("speaking");
+        return;
+      }
+
+      if (msg.type === "tts_end") {
+        // Audio playback is handled by the hook via onTtsPlaying
+        return;
+      }
+
       if (msg.type === "audio_debug") {
-        // silently consume — could show in dev tools later
+        return;
+      }
+
+      if (msg.type === "transcript") {
+        // Partial transcripts — could display in a future overlay
         return;
       }
 
@@ -146,6 +164,7 @@ export default function App() {
   const { status: wsStatus, connect, sendText, disconnect, wsRef } =
     useIntakeSocket({
       onMessage: handleWsMessage,
+      onTtsPlaying: handleTtsPlaying,
     });
 
   const mic = useMicrophone({ ws: wsRef.current, enabled: orbState === "listening" });

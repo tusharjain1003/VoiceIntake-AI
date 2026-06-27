@@ -33,6 +33,7 @@ from backend.fsm.runner import run_turn
 from backend.session.manager import session_manager
 from backend.session.models import IntakeState
 from backend.voice.deepgram_client import DeepgramStreamClient
+from backend.voice.tts_client import synthesize
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +198,7 @@ async def _handle_start(websocket: WebSocket, session: Any) -> None:
         websocket,
         {"type": "agent_text", "text": prompt},
     )
+    await _send_tts(websocket, prompt)
     await _send_json(
         websocket,
         {
@@ -255,6 +257,7 @@ async def _handle_text(
         websocket,
         {"type": "agent_text", "text": result.assistant_message},
     )
+    await _send_tts(websocket, result.assistant_message)
     await _send_json(
         websocket,
         {"type": "fields_update", "fields": _fields_dict(result.fields)},
@@ -285,6 +288,31 @@ async def _handle_text(
             websocket,
             {"type": "summary", "summary": summary_dict},
         )
+
+
+async def _send_tts(websocket: WebSocket, text: str) -> None:
+    """Synthesise TTS and send audio frames (best-effort; failures are logged)."""
+    if not settings.elevenlabs_api_key or not settings.elevenlabs_voice_id:
+        return
+    audio = await asyncio.to_thread(
+        synthesize,
+        text,
+        settings.elevenlabs_api_key,
+        settings.elevenlabs_voice_id,
+        settings.elevenlabs_model,
+    )
+    if audio is None:
+        return
+
+    await _send_json(
+        websocket,
+        {"type": "tts_start", "content_type": "audio/mpeg"},
+    )
+    try:
+        await websocket.send_bytes(audio)
+    except Exception:
+        pass
+    await _send_json(websocket, {"type": "tts_end"})
 
 
 async def _send_json(websocket: WebSocket, data: dict[str, Any]) -> None:
