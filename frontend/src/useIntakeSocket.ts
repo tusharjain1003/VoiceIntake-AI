@@ -90,5 +90,5 @@ export default function useIntakeSocket({
     };
   }, [disconnect]);
 
-  return { status, connect, sendText, disconnect };
+  return { status, connect, sendText, disconnect, wsRef };
 }

@@ -5,11 +5,14 @@ import HandoffBanner from "./components/HandoffBanner";
 import SessionHeader from "./components/SessionHeader";
 import SummaryView from "./components/SummaryView";
 import TranscriptPanel from "./components/TranscriptPanel";
+import VoiceOrb from "./components/VoiceOrb";
 import useIntakeSocket from "./useIntakeSocket";
+import useMicrophone from "./useMicrophone";
 import type {
   ExtractedFields,
   IntakeState,
   Message,
+  OrbState,
   PreVisitSummary,
   WSServerMessage,
 } from "./types";
@@ -40,6 +43,7 @@ export default function App() {
   const [redFlagSeverity, setRedFlagSeverity] = useState<string | null>(null);
   const [handoffReason, setHandoffReason] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("ws");
+  const [orbState, setOrbState] = useState<OrbState>("idle");
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
@@ -89,6 +93,11 @@ export default function App() {
           text: msg.text,
         };
         setMessages((prev) => [...prev, aiMsg]);
+        // Briefly show speaking state then return to listening
+        setOrbState("speaking");
+        setTimeout(() => {
+          setOrbState((prev) => (prev === "speaking" ? "listening" : prev));
+        }, 800);
         return;
       }
 
@@ -112,6 +121,12 @@ export default function App() {
         setHandoffTriggered(msg.handoff_triggered);
         setRedFlagSeverity(msg.severity);
         setHandoffReason(msg.reason);
+        setOrbState("handoff");
+        return;
+      }
+
+      if (msg.type === "audio_debug") {
+        // silently consume — could show in dev tools later
         return;
       }
 
@@ -128,9 +143,12 @@ export default function App() {
     [],
   );
 
-  const { status: wsStatus, connect, sendText, disconnect } = useIntakeSocket({
-    onMessage: handleWsMessage,
-  });
+  const { status: wsStatus, connect, sendText, disconnect, wsRef } =
+    useIntakeSocket({
+      onMessage: handleWsMessage,
+    });
+
+  const mic = useMicrophone({ ws: wsRef.current, enabled: orbState === "listening" });
 
   const resetState = useCallback(() => {
     setSessionId("new");
@@ -154,12 +172,14 @@ export default function App() {
     setHandoffTriggered(false);
     setRedFlagSeverity(null);
     setHandoffReason(null);
+    setOrbState("idle");
   }, []);
 
   const handleNewSession = useCallback(() => {
+    mic.stop();
     disconnect();
     resetState();
-  }, [disconnect, resetState]);
+  }, [disconnect, resetState, mic]);
 
   const handleSend = useCallback(async () => {
     const msg = input.trim();
@@ -173,6 +193,7 @@ export default function App() {
     };
     setMessages((prev) => [...prev, userMsg]);
     setLoading(true);
+    setOrbState("processing");
 
     try {
       // WebSocket path
@@ -182,11 +203,9 @@ export default function App() {
           setLoading(false);
           return;
         }
-        // Not connected — try connecting, then fall through to REST
         const sid =
           sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
         connect(sid);
-        // Fall through to REST for this message; next messages will use WS
       }
 
       // REST fallback
@@ -199,12 +218,13 @@ export default function App() {
         sessionIdRef.current = res.session_id;
       }
 
-      // Reconnect WebSocket now that we have a real session id
       if (mode === "ws" && wsStatus !== "connected") {
         connect(res.session_id);
       }
 
       applyResponse(res);
+      setOrbState("speaking");
+      setTimeout(() => setOrbState((prev) => (prev === "speaking" ? "idle" : prev)), 800);
     } catch (err) {
       const errorMsg: Message = {
         id: crypto.randomUUID(),
@@ -215,10 +235,32 @@ export default function App() {
             : "An unexpected error occurred.",
       };
       setMessages((prev) => [...prev, errorMsg]);
+      setOrbState("idle");
     } finally {
       setLoading(false);
     }
   }, [input, loading, mode, wsStatus, sendText, connect, applyResponse]);
+
+  const handleStartVoice = useCallback(async () => {
+    if (orbState !== "idle") return;
+
+    // Ensure WebSocket is connected
+    if (mode === "ws" && wsStatus !== "connected") {
+      const sid =
+        sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
+      connect(sid);
+      // Give the connection a moment to establish
+      await new Promise((r) => setTimeout(r, 300));
+    }
+
+    setOrbState("listening");
+    mic.start();
+  }, [orbState, mode, wsStatus, connect, mic]);
+
+  const handleStopVoice = useCallback(() => {
+    mic.stop();
+    setOrbState("idle");
+  }, [mic]);
 
   const toggleMode = useCallback(() => {
     setMode((prev) => (prev === "ws" ? "rest" : "ws"));
@@ -277,7 +319,18 @@ export default function App() {
               <span className="status-label">WS Status</span>
               <span className="status-value">{wsStatus}</span>
             </div>
+            <div className="status-item">
+              <span className="status-label">Mic</span>
+              <span className="status-value">{mic.status}</span>
+            </div>
           </div>
+
+          <VoiceOrb
+            state={handoffTriggered ? "handoff" : orbState}
+            onStart={handleStartVoice}
+            onStop={handleStopVoice}
+            disabled={callComplete}
+          />
 
           <button className="btn-mode-toggle" onClick={toggleMode}>
             Switch to {mode === "ws" ? "REST" : "WebSocket"}

@@ -83,7 +83,10 @@ export type WSServerMessage =
       severity: string | null;
       reason: string | null;
     }
-  | { type: "error"; message: string };
+  | { type: "error"; message: string }
+  | { type: "audio_debug"; bytes_received: number };
+
+export type OrbState = "idle" | "listening" | "processing" | "speaking" | "handoff";
 
 export const STATE_LABELS: Record<IntakeState, string> = {
   greeting: "Greeting",

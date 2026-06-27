@@ -72,6 +72,26 @@ def test_ws_unknown_type() -> None:
         print(f"  ✓ unknown type error: {err['message']}")
 
 
+def test_ws_binary_audio() -> None:
+    """Verify binary audio frames are accepted without breaking the protocol."""
+    client = TestClient(app)
+
+    with client.websocket_connect("/ws/intake/new") as ws:
+        ws.receive_json()  # session_id
+
+        # Send a few binary chunks simulating WebM/Opus
+        for _ in range(3):
+            ws.send_bytes(b"\x00" * 1024)  # 1 KB chunk
+
+        # Normal text flow must still work
+        ws.send_json({"type": "text", "message": "John Smith"})
+        msg = ws.receive_json()
+        assert msg["type"] == "agent_text"
+        msg = ws.receive_json()
+        assert msg["type"] == "fields_update" or msg["type"] == "state_update"
+        print("  ✓ binary audio frames accepted, text flow intact")
+
+
 def test_ws_bad_session() -> None:
     """Verify connecting to a non-existent session returns an error."""
     client = TestClient(app)
@@ -87,5 +107,6 @@ if __name__ == "__main__":
     print("WebSocket smoke tests:\n")
     test_ws_handshake()
     test_ws_unknown_type()
+    test_ws_binary_audio()
     test_ws_bad_session()
     print("\nAll WebSocket smoke tests passed.")

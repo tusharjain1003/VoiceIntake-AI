@@ -417,6 +417,102 @@ body,
 }
 
 /* ------------------------------------------------------------------ */
+/*  Voice orb                                                          */
+/* ------------------------------------------------------------------ */
+.voice-orb-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.voice-orb-button {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.2s, box-shadow 0.2s, transform 0.15s;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+}
+
+.voice-orb-button:hover:not(:disabled) {
+  transform: scale(1.05);
+}
+
+.voice-orb-button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.voice-orb-button--idle {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4);
+}
+
+.voice-orb-button--idle:hover {
+  background: var(--accent-hover);
+}
+
+.voice-orb-button--listening {
+  background: #059669;
+  color: #fff;
+  animation: orb-pulse-green 1.5s ease-in-out infinite;
+}
+
+.voice-orb-button--processing {
+  background: var(--warning);
+  color: #000;
+  animation: orb-spin 1s linear infinite;
+}
+
+.voice-orb-button--speaking {
+  background: var(--accent);
+  color: #fff;
+  animation: orb-pulse-accent 1s ease-in-out infinite;
+}
+
+.voice-orb-button--handoff {
+  background: var(--danger);
+  color: #fff;
+  animation: orb-pulse-red 0.8s ease-in-out infinite;
+}
+
+.voice-orb-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+@keyframes orb-pulse-green {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(5, 150, 105, 0.5); }
+  50% { box-shadow: 0 0 0 12px transparent; }
+}
+
+@keyframes orb-pulse-accent {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4); }
+  50% { box-shadow: 0 0 0 12px transparent; }
+}
+
+@keyframes orb-pulse-red {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.5); }
+  50% { box-shadow: 0 0 0 12px transparent; }
+}
+
+@keyframes orb-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Mode toggle                                                        */
 /* ------------------------------------------------------------------ */
 .btn-mode-toggle {

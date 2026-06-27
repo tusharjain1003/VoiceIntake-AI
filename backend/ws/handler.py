@@ -5,6 +5,7 @@ Message types (client → server):
   {"type":"text","message":"..."}
   {"type":"start"}
   {"type":"stop"}
+  Binary frames (WebM/Opus audio chunks via MediaRecorder)
 
 Message types (server → client):
   {"type":"session_id","id":"..."}
@@ -13,9 +14,13 @@ Message types (server → client):
   {"type":"state_update","current_node":"...","call_complete":bool}
   {"type":"summary","summary":{...}|null}
   {"type":"handoff","handoff_triggered":bool,"severity":"...","reason":"..."}
+  {"type":"audio_debug","bytes_received":int}
   {"type":"error","message":"..."}
 """
 
+import json
+import logging
+import time
 from typing import Any, Optional
 
 from fastapi import WebSocket
@@ -24,6 +29,10 @@ from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.runner import run_turn
 from backend.session.manager import session_manager
 from backend.session.models import IntakeState
+
+logger = logging.getLogger(__name__)
+
+_AUDIO_DEBUG_INTERVAL = 5  # seconds between audio_debug events
 
 
 async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
@@ -45,8 +54,42 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
 
     session = session_manager.get_or_create_session(session_id)
 
+    audio_bytes = 0
+    last_debug_ts = time.monotonic()
+
     try:
-        async for raw in websocket.iter_json():
+        while True:
+            event = await websocket.receive()
+            now = time.monotonic()
+
+            # Binary frame — WebM/Opus audio chunk from MediaRecorder
+            if "bytes" in event:
+                chunk = event["bytes"]
+                audio_bytes += len(chunk)
+                logger.info("audio chunk: %d bytes (total: %d)", len(chunk), audio_bytes)
+
+                # Send periodic debug event
+                if now - last_debug_ts >= _AUDIO_DEBUG_INTERVAL:
+                    await _send_json(
+                        websocket,
+                        {"type": "audio_debug", "bytes_received": audio_bytes},
+                    )
+                    last_debug_ts = now
+                continue
+
+            # Text frame — must be valid JSON
+            if "text" not in event:
+                continue
+
+            try:
+                raw = json.loads(event["text"])
+            except json.JSONDecodeError:
+                await _send_json(
+                    websocket,
+                    {"type": "error", "message": "Invalid JSON"},
+                )
+                continue
+
             msg_type = raw.get("type")
 
             if msg_type == "start":
@@ -66,6 +109,7 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
                         "message": f"Unknown message type: {msg_type}",
                     },
                 )
+
     except Exception:
         pass
     finally:
