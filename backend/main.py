@@ -70,6 +70,10 @@ def text_intake(session_id: str, body: TextIntakeRequest) -> TextIntakeResponse:
     session.call_complete = result.call_complete
     if result.retry_count_by_node is not None:
         session.retry_count_by_node = result.retry_count_by_node
+    session.handoff_triggered = result.handoff_triggered
+    session.red_flag_severity = result.red_flag_severity
+    session.red_flag_id = result.red_flag_id
+    session.handoff_reason = result.handoff_reason
     session_manager.update_session(session)
 
     return TextIntakeResponse(
@@ -79,4 +83,8 @@ def text_intake(session_id: str, body: TextIntakeRequest) -> TextIntakeResponse:
         extracted_fields=result.fields,
         call_complete=result.call_complete,
         final_summary=result.final_summary,
+        handoff_triggered=result.handoff_triggered,
+        red_flag_severity=result.red_flag_severity,
+        red_flag_id=result.red_flag_id,
+        handoff_reason=result.handoff_reason,
     )

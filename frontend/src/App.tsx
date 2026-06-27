@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { sendMessage } from "./api";
 import FieldsPanel from "./components/FieldsPanel";
+import HandoffBanner from "./components/HandoffBanner";
 import SessionHeader from "./components/SessionHeader";
 import SummaryView from "./components/SummaryView";
 import TranscriptPanel from "./components/TranscriptPanel";
@@ -31,6 +32,9 @@ export default function App() {
   const [callComplete, setCallComplete] = useState(false);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [handoffTriggered, setHandoffTriggered] = useState(false);
+  const [redFlagSeverity, setRedFlagSeverity] = useState<string | null>(null);
+  const [handoffReason, setHandoffReason] = useState<string | null>(null);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
@@ -53,6 +57,9 @@ export default function App() {
     setCallComplete(false);
     setInput("");
     setLoading(false);
+    setHandoffTriggered(false);
+    setRedFlagSeverity(null);
+    setHandoffReason(null);
   }, []);
 
   const handleSend = useCallback(async () => {
@@ -82,6 +89,9 @@ export default function App() {
       setFields(res.extracted_fields);
       setCallComplete(res.call_complete);
       if (res.final_summary) setSummary(res.final_summary);
+      setHandoffTriggered(res.handoff_triggered);
+      setRedFlagSeverity(res.red_flag_severity);
+      setHandoffReason(res.handoff_reason);
 
       const assistantMsg: Message = {
         id: crypto.randomUUID(),
@@ -130,6 +140,9 @@ export default function App() {
         </section>
 
         <aside className="panel panel--right">
+          {handoffTriggered && (
+            <HandoffBanner severity={redFlagSeverity} reason={handoffReason} />
+          )}
           <div className="status-panel">
             <h2 className="panel-title">Status</h2>
             <div className="status-item">

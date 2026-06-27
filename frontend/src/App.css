@@ -336,6 +336,63 @@ body,
 }
 
 /* ------------------------------------------------------------------ */
+/*  Handoff banner                                                     */
+/* ------------------------------------------------------------------ */
+.handoff-banner {
+  padding: 12px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+}
+
+.handoff-banner--critical {
+  background: #7f1d1d;
+  border: 1px solid var(--danger);
+}
+
+.handoff-banner--high {
+  background: #713f12;
+  border: 1px solid var(--warning);
+}
+
+.handoff-banner__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.handoff-banner__badge {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.handoff-banner--critical .handoff-banner__badge {
+  background: var(--danger);
+  color: #fff;
+}
+
+.handoff-banner--high .handoff-banner__badge {
+  background: var(--warning);
+  color: #000;
+}
+
+.handoff-banner__title {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.handoff-banner__reason {
+  font-size: 12px;
+  opacity: 0.85;
+  line-height: 1.4;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Status panel                                                       */
 /* ------------------------------------------------------------------ */
 .status-panel {

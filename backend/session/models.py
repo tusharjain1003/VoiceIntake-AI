@@ -61,6 +61,10 @@ class TextIntakeResponse(BaseModel):
     extracted_fields: ExtractedFields
     call_complete: bool = False
     final_summary: Optional[PreVisitSummary] = None
+    handoff_triggered: bool = False
+    red_flag_severity: Optional[str] = None
+    red_flag_id: Optional[str] = None
+    handoff_reason: Optional[str] = None
 
 
 class SessionData(BaseModel):
@@ -70,3 +74,7 @@ class SessionData(BaseModel):
     call_complete: bool = False
     turn_count: int = 0
     retry_count_by_node: dict[str, int] = Field(default_factory=dict)
+    handoff_triggered: bool = False
+    red_flag_severity: Optional[str] = None
+    red_flag_id: Optional[str] = None
+    handoff_reason: Optional[str] = None

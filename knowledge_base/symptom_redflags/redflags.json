@@ -1,0 +1,115 @@
+{
+  "flags": [
+    {
+      "id": "CHEST_PAIN_DYSPNEA",
+      "label": "Chest Pain / Dyspnea",
+      "severity": "HIGH",
+      "immediate_handoff": false,
+      "description": "Patient reports chest pain, chest tightness, or difficulty breathing (non-critical mention).",
+      "keywords": [
+        "chest pain",
+        "chest tightness",
+        "chest pressure",
+        "chest discomfort",
+        "pain in my chest",
+        "short of breath",
+        "shortness of breath",
+        "hard to breathe",
+        "difficulty breathing",
+        "difficulty catching my breath",
+        "can't breathe",
+        "breathing hard"
+      ]
+    },
+    {
+      "id": "STROKE_SYMPTOMS",
+      "label": "Stroke Symptoms",
+      "severity": "CRITICAL",
+      "immediate_handoff": true,
+      "description": "Patient reports symptoms consistent with an acute stroke.",
+      "keywords": [
+        "face drooping",
+        "facial droop",
+        "drooping on one side",
+        "numb on one side",
+        "numbness on one side",
+        "weak on one side",
+        "weakness on one side",
+        "can't speak",
+        "slurred speech",
+        "trouble speaking",
+        "difficulty speaking",
+        "sudden numbness",
+        "sudden weakness",
+        "sudden confusion",
+        "trouble understanding speech",
+        "sudden trouble seeing",
+        "loss of vision",
+        "sudden severe headache",
+        "worst headache of my life",
+        "can't move my arm",
+        "can't move my leg",
+        "drooping face"
+      ]
+    },
+    {
+      "id": "SUICIDAL_IDEATION",
+      "label": "Suicidal Ideation",
+      "severity": "CRITICAL",
+      "immediate_handoff": true,
+      "description": "Patient expresses thoughts of self-harm or suicide.",
+      "keywords": [
+        "want to die",
+        "want to kill myself",
+        "suicidal",
+        "suicide",
+        "end my life",
+        "hurt myself",
+        "self-harm",
+        "self harm",
+        "better off dead",
+        "don't want to live",
+        "thinking of killing myself",
+        "thoughts of suicide",
+        "plan to kill myself"
+      ]
+    },
+    {
+      "id": "SEVERE_BREATHING_DIFFICULTY",
+      "label": "Severe Breathing Difficulty",
+      "severity": "CRITICAL",
+      "immediate_handoff": true,
+      "description": "Patient reports severe respiratory distress.",
+      "keywords": [
+        "can't catch my breath",
+        "gasping for air",
+        "choking",
+        "can't breathe at all",
+        "struggling to breathe",
+        "breathing is very difficult",
+        "severe shortness of breath",
+        "cannot breathe",
+        "barely breathing"
+      ]
+    },
+    {
+      "id": "LOSS_OF_CONSCIOUSNESS",
+      "label": "Loss of Consciousness",
+      "severity": "CRITICAL",
+      "immediate_handoff": true,
+      "description": "Patient reports fainting, passing out, or loss of consciousness.",
+      "keywords": [
+        "passed out",
+        "fainted",
+        "loss of consciousness",
+        "lost consciousness",
+        "blacked out",
+        "collapsed",
+        "unconscious",
+        "knocked out",
+        "fell unconscious",
+        "syncope"
+      ]
+    }
+  ]
+}

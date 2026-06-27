@@ -50,6 +50,10 @@ export interface TextIntakeResponse {
   extracted_fields: ExtractedFields;
   call_complete: boolean;
   final_summary: PreVisitSummary | null;
+  handoff_triggered: boolean;
+  red_flag_severity: string | null;
+  red_flag_id: string | null;
+  handoff_reason: string | null;
 }
 
 export interface Message {

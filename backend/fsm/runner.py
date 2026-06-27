@@ -7,6 +7,7 @@ from typing import Optional
 from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.prompts import PROMPTS
 from backend.observability.latency_tracker import LatencyTracker
+from backend.safety.escalation import check_escalation
 from backend.safety.guardrails import check_response_safety
 from backend.session.models import (
     ExtractedFields,
@@ -17,6 +18,12 @@ from backend.session.models import (
 
 MAX_RETRIES_PER_NODE = 3
 
+_CRITICAL_HANDOFF_MSG = (
+    "I'm going to pause the intake and connect you with a human team member now. "
+    "If you feel you may be in immediate danger or this is an emergency, "
+    "please contact local emergency services right away."
+)
+
 
 @dataclass
 class RunResult:
@@ -26,6 +33,10 @@ class RunResult:
     call_complete: bool
     final_summary: Optional[PreVisitSummary] = None
     retry_count_by_node: Optional[dict[str, int]] = None
+    handoff_triggered: bool = False
+    red_flag_severity: Optional[str] = None
+    red_flag_id: Optional[str] = None
+    handoff_reason: Optional[str] = None
 
 
 def _apply_guardrails(result: RunResult) -> RunResult:
@@ -602,17 +613,17 @@ def run_turn(
             if retry_count_by_node[current_node_name] >= MAX_RETRIES_PER_NODE:
                 tracker.stop("run_turn")
                 return _apply_guardrails(_route_to_handoff(new_fields, retry_count_by_node))
-            reask = node.prompt_template
-            tracker.stop("run_turn")
-            return _apply_guardrails(
-                RunResult(
-                    next_node=current_node_name,
-                    assistant_message=f"I didn't quite get that. {reask}",
-                    fields=new_fields,
-                    call_complete=False,
-                    retry_count_by_node=retry_count_by_node,
-                )
+            # Check escalation even on retry — a CRITICAL flag overrides retry
+            result = RunResult(
+                next_node=current_node_name,
+                assistant_message=f"I didn't quite get that. {node.prompt_template}",
+                fields=new_fields,
+                call_complete=False,
+                retry_count_by_node=retry_count_by_node,
             )
+            result = _check_and_apply_escalation(result, message)
+            tracker.stop("run_turn")
+            return _apply_guardrails(result)
         retry_count_by_node[current_node_name] = 0
         fields = new_fields
 
@@ -626,15 +637,38 @@ def run_turn(
         assistant_message = next_node.prompt_template if next_node else ""
 
     tracker.stop("run_turn")
-    return _apply_guardrails(
-        RunResult(
-            next_node=next_node_name,
-            assistant_message=assistant_message,
-            fields=fields,
-            call_complete=False,
-            retry_count_by_node=retry_count_by_node,
-        )
+    result = RunResult(
+        next_node=next_node_name,
+        assistant_message=assistant_message,
+        fields=fields,
+        call_complete=False,
+        retry_count_by_node=retry_count_by_node,
     )
+    result = _check_and_apply_escalation(result, message)
+    return _apply_guardrails(result)
+
+
+def _check_and_apply_escalation(result: RunResult, message: str) -> RunResult:
+    """Run red-flag escalation on *message* and mutate *result* if triggered.
+
+    - CRITICAL flags immediately route to handoff with a specific message.
+    - HIGH flags are recorded on the result but the intake continues.
+    """
+    escalation = check_escalation(message)
+    if escalation is None:
+        return result
+
+    result.handoff_triggered = True
+    result.red_flag_severity = escalation.severity
+    result.red_flag_id = escalation.flag_id
+    result.handoff_reason = escalation.description
+
+    if escalation.severity == "CRITICAL":
+        result.next_node = IntakeState.HANDOFF.value
+        result.assistant_message = _CRITICAL_HANDOFF_MSG
+        result.call_complete = False
+
+    return result
 
 
 def _route_to_handoff(fields: ExtractedFields, retry_count_by_node: dict[str, int]) -> RunResult:
