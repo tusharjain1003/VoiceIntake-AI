@@ -3,9 +3,10 @@ import type { Message } from "../types";
 
 interface TranscriptPanelProps {
   messages: Message[];
+  interimTranscript?: string;
 }
 
-export default function TranscriptPanel({ messages }: TranscriptPanelProps) {
+export default function TranscriptPanel({ messages, interimTranscript = "" }: TranscriptPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -29,6 +30,13 @@ export default function TranscriptPanel({ messages }: TranscriptPanelProps) {
             <p className="message-text">{msg.text}</p>
           </div>
         ))}
+
+        {interimTranscript && (
+          <div className="message message--user message--interim">
+            <span className="message-role">You</span>
+            <p className="message-text">{interimTranscript}</p>
+          </div>
+        )}
 
         <div ref={bottomRef} />
       </div>

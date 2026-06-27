@@ -112,6 +112,10 @@ export default function useIntakeSocket({
         try {
           const msg: WSServerMessage = JSON.parse(event.data);
 
+          if (import.meta.env.DEV) {
+            console.log("[WS] <=", msg);
+          }
+
           if (msg.type === "tts_start") {
             expectingBinaryRef.current = true;
             ttsChunksRef.current = [];

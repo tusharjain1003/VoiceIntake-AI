@@ -87,6 +87,36 @@ async def health() -> dict[str, str | bool]:
     }
 
 
+@app.get("/api/sessions")
+async def list_sessions() -> dict:
+    from backend.session.models import SessionData
+
+    if session_mgr.session_manager is None:
+        raise HTTPException(status_code=503, detail="Session store not initialized.")
+    try:
+        keys = await session_mgr.session_manager.redis.keys("session:*")
+        sessions = []
+        for key in keys[-20:]:
+            raw = await session_mgr.session_manager.redis.get(key)
+            if raw:
+                try:
+                    s = SessionData.model_validate_json(raw)
+                    sessions.append(
+                        {
+                            "session_id": s.session_id,
+                            "current_node": s.current_node.value if s.current_node else None,
+                            "call_complete": s.call_complete,
+                            "turn_count": s.turn_count,
+                            "handoff_triggered": s.handoff_triggered,
+                        }
+                    )
+                except Exception:
+                    pass
+        return {"sessions": list(reversed(sessions))}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+
+
 @app.post("/text/intake/{session_id}")
 async def text_intake(session_id: str, body: dict) -> dict:
     if session_mgr.session_manager is None:

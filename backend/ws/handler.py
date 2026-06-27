@@ -5,6 +5,8 @@ Message types (client -> server):
   {"type":"text","message":"..."}
   {"type":"start"}
   {"type":"stop"}
+  {"type":"voice_start"}
+  {"type":"voice_stop"}
   Binary frames (WebM/Opus audio chunks via MediaRecorder)
 
 Message types (server -> client):
@@ -14,18 +16,19 @@ Message types (server -> client):
   {"type":"state_update","current_node":"...","call_complete":bool}
   {"type":"summary","summary":{...}|null}
   {"type":"handoff","handoff_triggered":bool,"severity":"...","reason":"..."}
-  {"type":"audio_debug","bytes_received":int}
+  {"type":"audio_debug","chunks_received":int,"bytes_received":int,"chunks_forwarded":int,...}
   {"type":"transcript","text":"...","is_final":bool}
   {"type":"tts_start","content_type":"audio/mpeg"}
   {"type":"tts_end"}
   {"type":"latency","turn_id":"...","metrics":{...}}
-  {"type":"error","message":"..."}
+  {"type":"error","code":"...","message":"..."}
 """
 
 import asyncio
 import json
 import logging
 import time
+from dataclasses import dataclass
 from typing import Any, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -45,7 +48,52 @@ from backend.voice.tts_client import synthesize
 
 logger = logging.getLogger(__name__)
 
-_AUDIO_DEBUG_INTERVAL = 5
+_DEBUG_INTERVAL = 3
+_KEEPALIVE_INTERVAL = 4
+
+
+@dataclass
+class DgStats:
+    deepgram_connected_at: float = 0.0
+    audio_chunks_received: int = 0
+    audio_bytes_received: int = 0
+    audio_chunks_queued: int = 0
+    audio_bytes_queued: int = 0
+    audio_chunks_flushed: int = 0
+    audio_bytes_flushed: int = 0
+    audio_chunks_forwarded: int = 0
+    audio_bytes_forwarded: int = 0
+    last_audio_chunk_at: float = 0.0
+    transcript_events_received: int = 0
+    final_transcripts_received: int = 0
+    keepalives_sent: int = 0
+    deepgram_close_code: Optional[int] = None
+    deepgram_close_reason: str = ""
+
+
+# ---------------------------------------------------------------------------
+# KeepAlive background loop
+# ---------------------------------------------------------------------------
+
+
+async def _keepalive_loop(
+    dg: DeepgramStreamClient,
+    stats: DgStats,
+    stop_event: asyncio.Event,
+) -> None:
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=_KEEPALIVE_INTERVAL)
+            break
+        except asyncio.TimeoutError:
+            if dg and dg.connected and not dg.closed:
+                await dg.send_keepalive()
+                stats.keepalives_sent += 1
+
+
+# ---------------------------------------------------------------------------
+# Main WebSocket handler
+# ---------------------------------------------------------------------------
 
 
 async def handle_intake_ws(
@@ -64,13 +112,20 @@ async def handle_intake_ws(
             try:
                 session = await session_store.get_session(session_id)
             except SessionStoreUnavailableError as exc:
-                await _send_json(websocket, {"type": "error", "message": str(exc)})
+                await _send_json(
+                    websocket,
+                    {"type": "error", "code": "session_store", "message": str(exc)},
+                )
                 await websocket.close(code=1011)
                 return
             if session is None:
                 await _send_json(
                     websocket,
-                    {"type": "error", "message": f"Session {session_id} not found."},
+                    {
+                        "type": "error",
+                        "code": "not_found",
+                        "message": f"Session {session_id} not found.",
+                    },
                 )
                 await websocket.close()
                 return
@@ -78,66 +133,104 @@ async def handle_intake_ws(
         try:
             session = await session_store.get_or_create_session(session_id)
         except SessionStoreUnavailableError as exc:
-            await _send_json(websocket, {"type": "error", "message": str(exc)})
+            await _send_json(
+                websocket,
+                {"type": "error", "code": "session_store", "message": str(exc)},
+            )
             await websocket.close(code=1011)
             return
     except SessionStoreUnavailableError as exc:
-        await _send_json(websocket, {"type": "error", "message": str(exc)})
+        await _send_json(
+            websocket,
+            {"type": "error", "code": "session_store", "message": str(exc)},
+        )
         await websocket.close(code=1011)
         return
 
     dg: Optional[DeepgramStreamClient] = None
     _dg_started = False
     timing = TurnTiming()
+    stats = DgStats()
 
-    audio_bytes = 0
+    keepalive_stop: Optional[asyncio.Event] = None
+    keepalive_task: Optional[asyncio.Task] = None
     last_debug_ts = time.monotonic()
+    _voice_active = False  # tracks whether frontend mic is on
 
     try:
         while True:
             ws_task = asyncio.create_task(websocket.receive())
             dg_task = asyncio.create_task(dg.read_event()) if dg and dg.available else None
 
-            tasks = [t for t in (ws_task, dg_task) if t is not None]
+            tasks: list[asyncio.Task] = [t for t in (ws_task, dg_task) if t is not None]
             done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
 
             now = time.monotonic()
 
             if dg_task and dg_task in done:
-                await _handle_dg_event(websocket, session, dg_task.result(), session_store, timing)
+                await _handle_dg_event(
+                    websocket,
+                    session,
+                    dg_task.result(),
+                    session_store,
+                    timing,
+                    stats,
+                )
 
             if ws_task in done:
                 event = ws_task.result()
 
                 if "bytes" in event:
                     chunk = event["bytes"]
-                    audio_bytes += len(chunk)
+                    stats.audio_chunks_received += 1
+                    stats.audio_bytes_received += len(chunk)
+                    stats.last_audio_chunk_at = now
                     timing.set_first_chunk(now)
+
+                    if stats.audio_chunks_received <= 5:
+                        logger.info(
+                            "Audio chunk #%d size=%d bytes session=%s",
+                            stats.audio_chunks_received,
+                            len(chunk),
+                            session.session_id,
+                        )
+
+                    if len(chunk) == 0:
+                        continue
 
                     if settings.deepgram_api_key and not _dg_started:
                         _dg_started = True
-                        dg = DeepgramStreamClient(
-                            api_key=settings.deepgram_api_key,
-                            model=settings.deepgram_model,
-                            language=settings.deepgram_language,
-                        )
+                        dg = _create_deepgram(session.session_id, stats, now)
                         asyncio.create_task(dg.start())
-
-                    if dg and dg.available:
-                        await dg.send(chunk)
-
-                    if now - last_debug_ts >= _AUDIO_DEBUG_INTERVAL:
-                        await _send_json(
-                            websocket,
-                            {"type": "audio_debug", "bytes_received": audio_bytes},
+                        keepalive_stop = asyncio.Event()
+                        keepalive_task = asyncio.create_task(
+                            _keepalive_loop(dg, stats, keepalive_stop)
                         )
-                        last_debug_ts = now
+
+                    if dg and not dg.closed:
+                        forwarded = await dg.send(chunk)
+                        if forwarded:
+                            stats.audio_chunks_forwarded += 1
+                            stats.audio_bytes_forwarded += len(chunk)
+                            if stats.audio_chunks_forwarded <= 5:
+                                logger.info(
+                                    "Forwarded audio chunk #%d size=%d to Deepgram session=%s",
+                                    stats.audio_chunks_forwarded,
+                                    len(chunk),
+                                    session.session_id,
+                                )
+                        else:
+                            stats.audio_chunks_queued += 1
+                            stats.audio_bytes_queued += len(chunk)
 
                 elif "text" in event:
                     try:
                         raw = json.loads(event["text"])
                     except json.JSONDecodeError:
-                        await _send_json(websocket, {"type": "error", "message": "Invalid JSON"})
+                        await _send_json(
+                            websocket,
+                            {"type": "error", "code": "bad_json", "message": "Invalid JSON"},
+                        )
                         continue
 
                     msg_type = raw.get("type")
@@ -147,28 +240,84 @@ async def handle_intake_ws(
                     elif msg_type == "text":
                         text = raw.get("message", "")
                         await _handle_text(websocket, session, text, session_store)
+                    elif msg_type == "voice_start":
+                        _voice_active = True
+                        logger.info("Voice start session=%s", session.session_id)
+                        if settings.deepgram_api_key:
+                            if dg is None or dg.closed or dg.error:
+                                if keepalive_task:
+                                    keepalive_task.cancel()
+                                    if keepalive_stop:
+                                        keepalive_stop.set()
+                                if dg:
+                                    asyncio.ensure_future(dg.close())
+                                _dg_started = True
+                                dg = _create_deepgram(session.session_id, stats, now)
+                                asyncio.create_task(dg.start())
+                                keepalive_stop = asyncio.Event()
+                                keepalive_task = asyncio.create_task(
+                                    _keepalive_loop(dg, stats, keepalive_stop)
+                                )
+                                logger.info(
+                                    "Deepgram created/restarted session=%s",
+                                    session.session_id,
+                                )
+                            elif not dg.connected and not dg.closed:
+                                logger.info(
+                                    "Deepgram already connecting session=%s",
+                                    session.session_id,
+                                )
+                    elif msg_type == "voice_stop":
+                        _voice_active = False
+                        logger.info("Voice stop session=%s", session.session_id)
+                        if dg and dg.connected and not dg.closed:
+                            await dg.finalize()
                     elif msg_type == "stop":
                         break
                     else:
                         await _send_json(
                             websocket,
-                            {"type": "error", "message": f"Unknown message type: {msg_type}"},
+                            {"type": "error", "code": "unknown_type", "message": msg_type},
                         )
 
             for task in pending:
                 task.cancel()
 
+            if now - last_debug_ts >= _DEBUG_INTERVAL:
+                await _send_audio_debug(websocket, stats)
+                last_debug_ts = now
+
     except WebSocketDisconnect:
         pass
     except Exception:
-        pass
+        logger.exception("WebSocket handler error")
     finally:
+        if keepalive_task:
+            keepalive_task.cancel()
+            if keepalive_stop:
+                keepalive_stop.set()
         if dg:
             await dg.close()
         try:
             await websocket.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Deepgram lifecycle helpers
+# ---------------------------------------------------------------------------
+
+
+def _create_deepgram(session_id: str, stats: DgStats, now: float) -> DeepgramStreamClient:
+    logger.info("Creating Deepgram client session=%s", session_id)
+    dg = DeepgramStreamClient(
+        api_key=settings.deepgram_api_key,
+        model=settings.deepgram_model,
+        language=settings.deepgram_language,
+    )
+    stats.deepgram_connected_at = now
+    return dg
 
 
 # ---------------------------------------------------------------------------
@@ -182,14 +331,44 @@ async def _handle_dg_event(
     event: tuple,
     session_store: SessionStore,
     timing: Optional[TurnTiming] = None,
+    stats: Optional[DgStats] = None,
 ) -> None:
     event_type = event[0]
 
-    if event_type == "transcript":
+    if event_type == "connected":
+        _, flush_count, flush_bytes = event
+        if flush_count > 0:
+            logger.info(
+                "Deepgram connected — flushed %d queued chunks (%d bytes) session=%s",
+                flush_count,
+                flush_bytes,
+                session.session_id,
+            )
+        if stats:
+            stats.audio_chunks_flushed = flush_count
+            stats.audio_bytes_flushed = flush_bytes
+
+    elif event_type == "transcript":
         _, text, is_final = event
+        if stats:
+            stats.transcript_events_received += 1
+            if is_final:
+                stats.final_transcripts_received += 1
+
         if not text.strip():
+            logger.debug("Deepgram event ignored — empty text session=%s", session.session_id)
             return
+
+        logger.info(
+            "Deepgram event session=%s type=%s text=%r is_final=%s",
+            session.session_id,
+            event_type,
+            text[:200],
+            is_final,
+        )
+
         if is_final:
+            await _send_json(websocket, {"type": "transcript", "text": text, "is_final": True})
             if timing:
                 timing.stt_final_time = time.monotonic()
                 timing.start_turn()
@@ -198,7 +377,45 @@ async def _handle_dg_event(
             await _send_json(websocket, {"type": "transcript", "text": text, "is_final": False})
 
     elif event_type == "error":
-        await _send_json(websocket, {"type": "error", "message": "STT unavailable"})
+        error_msg = event[1] if len(event) > 1 else str(event)
+        logger.error(
+            "Deepgram event type=error message=%s session=%s",
+            error_msg,
+            session.session_id,
+        )
+        await _send_json(
+            websocket,
+            {
+                "type": "error",
+                "code": "stt_error",
+                "message": "Speech recognition error. Try again or use text.",
+            },
+        )
+
+    elif event_type == "close":
+        code = event[1] if len(event) > 1 else None
+        reason = event[2] if len(event) > 2 else ""
+        logger.warning(
+            "Deepgram closed session=%s code=%s reason=%s",
+            session.session_id,
+            code,
+            reason,
+        )
+        if stats:
+            stats.deepgram_close_code = code
+            stats.deepgram_close_reason = reason
+
+        await _send_json(
+            websocket,
+            {
+                "type": "error",
+                "code": "deepgram_closed",
+                "message": (
+                    "Speech recognition disconnected."
+                    " Please restart voice capture or use text fallback."
+                ),
+            },
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +469,13 @@ async def _handle_text(
 
     session.turn_count += 1
 
+    logger.info(
+        "FSM before session=%s node=%s message=%r",
+        session.session_id,
+        session.current_node.value,
+        message[:200],
+    )
+
     if timing:
         timing.fsm_start = time.monotonic()
 
@@ -267,6 +491,14 @@ async def _handle_text(
     if timing:
         timing.fsm_end = time.monotonic()
 
+    logger.info(
+        "FSM after  session=%s node=%s->%s assistant=%r",
+        session.session_id,
+        session.current_node.value,
+        result.next_node or "complete",
+        result.assistant_message[:200],
+    )
+
     new_node = IntakeState(result.next_node) if result.next_node else IntakeState.COMPLETE
 
     session.current_node = new_node
@@ -281,7 +513,7 @@ async def _handle_text(
     try:
         await session_store.update_session(session)
     except SessionStoreUnavailableError as exc:
-        await _send_json(websocket, {"type": "error", "message": str(exc)})
+        await _send_json(websocket, {"type": "error", "code": "session_store", "message": str(exc)})
         await websocket.close(code=1011)
         return
 
@@ -417,6 +649,26 @@ async def _send_json(websocket: WebSocket, data: dict[str, Any]) -> None:
         await websocket.send_json(data)
     except Exception:
         pass
+
+
+async def _send_audio_debug(websocket: WebSocket, stats: DgStats) -> None:
+    await _send_json(
+        websocket,
+        {
+            "type": "audio_debug",
+            "chunks_received": stats.audio_chunks_received,
+            "bytes_received": stats.audio_bytes_received,
+            "chunks_queued": stats.audio_chunks_queued,
+            "bytes_queued": stats.audio_bytes_queued,
+            "chunks_flushed": stats.audio_chunks_flushed,
+            "bytes_flushed": stats.audio_bytes_flushed,
+            "chunks_forwarded": stats.audio_chunks_forwarded,
+            "bytes_forwarded": stats.audio_bytes_forwarded,
+            "transcript_events": stats.transcript_events_received,
+            "final_transcripts": stats.final_transcripts_received,
+            "keepalives_sent": stats.keepalives_sent,
+        },
+    )
 
 
 def _fields_dict(fields: Any) -> dict[str, Any]:

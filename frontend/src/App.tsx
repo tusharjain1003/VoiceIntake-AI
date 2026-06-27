@@ -47,6 +47,7 @@ export default function App() {
   const [mode, setMode] = useState<Mode>("ws");
   const [orbState, setOrbState] = useState<OrbState>("idle");
   const [latencyLogs, setLatencyLogs] = useState<LatencyEntry[]>([]);
+  const [interimTranscript, setInterimTranscript] = useState("");
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
@@ -140,6 +141,9 @@ export default function App() {
       }
 
       if (msg.type === "audio_debug") {
+        if (import.meta.env.DEV) {
+          console.log("[AudioDebug]", msg);
+        }
         return;
       }
 
@@ -152,14 +156,26 @@ export default function App() {
       }
 
       if (msg.type === "transcript") {
+        if (msg.is_final) {
+          const userMsg: Message = {
+            id: crypto.randomUUID(),
+            role: "user",
+            text: msg.text,
+          };
+          setMessages((prev) => [...prev, userMsg]);
+          setInterimTranscript("");
+        } else {
+          setInterimTranscript(msg.text);
+        }
         return;
       }
 
       if (msg.type === "error") {
+        const label = msg.code ? `[${msg.code}] ` : "";
         const errMsg: Message = {
           id: crypto.randomUUID(),
           role: "assistant",
-          text: `Error: ${msg.message}`,
+          text: `Error: ${label}${msg.message}`,
         };
         setMessages((prev) => [...prev, errMsg]);
         return;
@@ -174,7 +190,24 @@ export default function App() {
       onTtsPlaying: handleTtsPlaying,
     });
 
+  const sendJson = useCallback((data: Record<string, unknown>) => {
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(data));
+    }
+  }, [wsRef]);
+
   const mic = useMicrophone({ ws: wsRef.current });
+
+  const waitForWsOpen = useCallback(async (timeoutMs = 3000): Promise<boolean> => {
+    const started = performance.now();
+    while (performance.now() - started < timeoutMs) {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    return false;
+  }, [wsRef]);
 
   // Reset orb state when mic fails (permission denied, no device, etc.)
   useEffect(() => {
@@ -206,6 +239,8 @@ export default function App() {
     setRedFlagSeverity(null);
     setHandoffReason(null);
     setOrbState("idle");
+    setLatencyLogs([]);
+    setInterimTranscript("");
   }, []);
 
   const handleNewSession = useCallback(() => {
@@ -279,17 +314,29 @@ export default function App() {
       const sid =
         sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
       connect(sid);
-      await new Promise((r) => setTimeout(r, 300));
+      const connected = await waitForWsOpen();
+      if (!connected) {
+        const errorMsg: Message = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: "Error: WebSocket did not connect. Please try again or use text input.",
+        };
+        setMessages((prev) => [...prev, errorMsg]);
+        setOrbState("idle");
+        return;
+      }
     }
 
+    sendJson({ type: "voice_start" });
     setOrbState("listening");
     mic.start();
-  }, [orbState, mode, wsStatus, connect, mic]);
+  }, [orbState, mode, wsStatus, connect, waitForWsOpen, mic, sendJson]);
 
   const handleStopVoice = useCallback(() => {
+    sendJson({ type: "voice_stop" });
     mic.stop();
     setOrbState("idle");
-  }, [mic]);
+  }, [mic, sendJson]);
 
   const toggleMode = useCallback(() => {
     setMode((prev) => (prev === "ws" ? "rest" : "ws"));
@@ -316,7 +363,7 @@ export default function App() {
         </aside>
 
         <section className="panel panel--center">
-          <TranscriptPanel messages={messages} />
+          <TranscriptPanel messages={messages} interimTranscript={interimTranscript} />
         </section>
 
         <aside className="panel panel--right">

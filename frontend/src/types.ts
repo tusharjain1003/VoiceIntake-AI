@@ -69,7 +69,9 @@ export interface Message {
 export type WSClientMessage =
   | { type: "start" }
   | { type: "stop" }
-  | { type: "text"; message: string };
+  | { type: "text"; message: string }
+  | { type: "voice_start" }
+  | { type: "voice_stop" };
 
 export type WSServerMessage =
   | { type: "session_id"; id: string }
@@ -83,8 +85,17 @@ export type WSServerMessage =
       severity: string | null;
       reason: string | null;
     }
-  | { type: "error"; message: string }
-  | { type: "audio_debug"; bytes_received: number }
+  | { type: "error"; code?: string; message: string }
+  | {
+      type: "audio_debug";
+      chunks_received: number;
+      bytes_received: number;
+      chunks_forwarded: number;
+      bytes_forwarded: number;
+      transcript_events: number;
+      final_transcripts: number;
+      keepalives_sent: number;
+    }
   | { type: "transcript"; text: string; is_final: boolean }
   | { type: "tts_start"; content_type: string }
   | { type: "tts_end" }
