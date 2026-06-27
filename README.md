@@ -223,4 +223,4 @@ For voice mode: click the mic orb and speak responses naturally. For red flag de
 
 ## License
 
-Proprietary — see LICENSE.
+MIT License — see LICENSE.
