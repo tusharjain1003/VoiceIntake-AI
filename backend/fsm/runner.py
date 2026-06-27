@@ -607,6 +607,25 @@ def run_turn(
             _trace.finish(outputs=_finish_outputs(result))
         return result
 
+    # Early CRITICAL escalation check — short-circuit all processing
+    escalation = check_escalation(message)
+    if escalation is not None and escalation.severity == "CRITICAL":
+        tracker.stop("run_turn")
+        result = RunResult(
+            next_node=IntakeState.HANDOFF.value,
+            assistant_message=_CRITICAL_HANDOFF_MSG,
+            fields=fields,
+            call_complete=True,
+            retry_count_by_node=retry_count_by_node,
+            handoff_triggered=True,
+            red_flag_severity=escalation.severity,
+            red_flag_id=escalation.flag_id,
+            handoff_reason=escalation.description,
+        )
+        if _trace:
+            _trace.finish(outputs=_finish_outputs(result))
+        return result
+
     turn_id = str(uuid.uuid4())
 
     # Handle special nodes: CONFIRMATION, SUMMARY, HANDOFF
@@ -832,7 +851,8 @@ def run_turn(
 def _check_and_apply_escalation(result: RunResult, message: str) -> RunResult:
     """Run red-flag escalation on *message* and mutate *result* if triggered.
 
-    - CRITICAL flags immediately route to handoff with a specific message.
+    - CRITICAL flags immediately route to handoff with a specific message
+      and set call_complete=True to stop the session.
     - HIGH flags are recorded on the result but the intake continues.
     """
     escalation = check_escalation(message)
@@ -847,7 +867,7 @@ def _check_and_apply_escalation(result: RunResult, message: str) -> RunResult:
     if escalation.severity == "CRITICAL":
         result.next_node = IntakeState.HANDOFF.value
         result.assistant_message = _CRITICAL_HANDOFF_MSG
-        result.call_complete = False
+        result.call_complete = True
 
     return result
 

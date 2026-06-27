@@ -122,6 +122,34 @@ SCENARIOS: list[Scenario] = [
         tags=["redflag", "escalation_critical", "handoff"],
     ),
     Scenario(
+        name="stroke_symptoms_critical",
+        description=(
+            "Patient describes stroke symptoms — CRITICAL escalation → immediate handoff."
+        ),
+        patient_responses={
+            "greeting": "Morgan Lee, DOB 01/15/1960",
+            "identity": "01/15/1960",
+            "chief_complaint": "I woke up with numbness on my right side.",
+            "symptoms": "My face feels droopy on one side and I can't move my arm properly.",
+            "history": "I have high blood pressure.",
+            "allergies": "No known allergies.",
+            "medications": "Lisinopril 10mg daily.",
+            "visit_reason": "I think I might be having a stroke.",
+            "confirmation": "yes",
+        },
+        expected_fields={
+            "patient_name": "Morgan Lee",
+            "date_of_birth": "01/15/1960",
+            "chief_complaint": "I woke up with numbness on my right side.",
+            "medical_history": "I have high blood pressure.",
+        },
+        expect_handoff=True,
+        expect_escalation=True,
+        expected_escalation_severity="CRITICAL",
+        expected_escalation_flag="STROKE_SYMPTOMS",
+        tags=["redflag", "escalation_critical", "handoff"],
+    ),
+    Scenario(
         name="vague_patient",
         description="Patient gives short, vague answers — should still complete intake.",
         patient_responses={
