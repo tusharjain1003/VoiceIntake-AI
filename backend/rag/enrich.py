@@ -4,6 +4,9 @@ Enrich a PreVisitSummary with clinician-facing RAG context.
 Called from the WS handler and REST endpoint when a session completes.
 RAG output goes into ``summary.clinician_context`` and is never spoken
 to the patient.
+
+All failures are degraded gracefully — the base summary is returned with
+``clinician_context.rag_status = "unavailable"`` and a non-secret reason.
 """
 
 import logging
@@ -32,11 +35,25 @@ def _build_query(fields: ExtractedFields) -> str:
     return "\n".join(parts) if parts else "standard intake"
 
 
+def _mark_unavailable(
+    summary: PreVisitSummary,
+    reason: str,
+) -> None:
+    summary.clinician_context = {
+        "rag_status": "unavailable",
+        "rag_error": reason,
+    }
+
+
 async def enrich_summary_with_rag(
     summary: PreVisitSummary,
     fields: ExtractedFields,
 ) -> None:
-    """Run RAG retrieval and attach clinician_context to *summary*."""
+    """Run RAG retrieval and attach clinician_context to *summary*.
+
+    Never raises. On failure the summary is returned with
+    ``clinician_context.rag_status = "unavailable"``.
+    """
     query = _build_query(fields)
     query_embedding = None
 
@@ -56,7 +73,26 @@ async def enrich_summary_with_rag(
         )
     except Exception as exc:
         logger.warning("Embedding failed — skipping RAG enrichment: %s", exc)
-        trace.finish(outputs={"status": "failed", "error": str(exc), "stage": "embedding"})
+        trace.finish(
+            outputs={
+                "status": "failed",
+                "error": "embedding_failed",
+                "stage": "embedding",
+            },
+        )
+        _mark_unavailable(summary, "embedding_failed")
+        return
+
+    if AsyncSessionLocal is None:
+        logger.warning("Database unavailable — skipping RAG enrichment")
+        _mark_unavailable(summary, "db_unavailable")
+        trace.finish(
+            outputs={
+                "status": "failed",
+                "error": "db_unavailable",
+                "stage": "db_session",
+            },
+        )
         return
 
     async with AsyncSessionLocal() as db:
@@ -64,7 +100,14 @@ async def enrich_summary_with_rag(
             results = await retrieve_all_categories(db, query_embedding, top_k_per_category=2)
         except Exception as exc:
             logger.warning("RAG retrieval failed — skipping enrichment: %s", exc)
-            trace.finish(outputs={"status": "failed", "error": str(exc), "stage": "retrieval"})
+            trace.finish(
+                outputs={
+                    "status": "failed",
+                    "error": "retrieval_failed",
+                    "stage": "retrieval",
+                },
+            )
+            _mark_unavailable(summary, "retrieval_failed")
             return
 
     if results:
