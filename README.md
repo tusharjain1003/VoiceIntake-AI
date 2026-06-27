@@ -146,7 +146,7 @@ curl -s -X POST http://localhost:8000/text/intake/abc123 \
 4. The orb animates: green (listening) → yellow (processing) → purple (speaking)
 5. Red orb + banner = safety handoff triggered
 
-**Troubleshooting:** If voice doesn't work, check browser microphone permissions and ensure Deepgram/ElevenLabs keys are set. Use text mode as fallback.
+**Troubleshooting:** If voice doesn't work, check browser microphone permissions and ensure Deepgram/ElevenLabs keys are set. Use text mode as fallback. For live voice verification, see [VOICE_DEBUG.md](VOICE_DEBUG.md).
 
 ## How to Run Evals
 
