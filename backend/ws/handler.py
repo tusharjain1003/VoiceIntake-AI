@@ -574,13 +574,14 @@ async def _handle_text(
                 severity=result.red_flag_severity or "HIGH",
                 immediate_handoff=result.red_flag_severity == "CRITICAL",
             )
-        if result.call_complete and result.final_summary:
-            await repo.save_summary(session.session_id, result.final_summary.model_dump())
     except Exception:
         logger.warning("Postgres persistence error session=%s", session.session_id, exc_info=True)
 
     if result.call_complete and result.final_summary:
         await enrich_summary_with_rag(result.final_summary, result.fields)
+        saved = await repo.save_summary(session.session_id, result.final_summary.model_dump())
+        if not saved:
+            logger.error("Failed to persist final summary session=%s", session.session_id)
         summary_dict = _summary_dict(result.final_summary)
         await _send_json(websocket, {"type": "summary", "summary": summary_dict})
         trace = Trace(

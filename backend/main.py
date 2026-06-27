@@ -199,8 +199,10 @@ async def text_intake(session_id: str, body: dict) -> dict:
         )
 
     if result.call_complete and result.final_summary:
-        await repo.save_summary(session.session_id, result.final_summary.model_dump())
         await enrich_summary_with_rag(result.final_summary, result.fields)
+        saved = await repo.save_summary(session.session_id, result.final_summary.model_dump())
+        if not saved:
+            logger.error("Failed to persist final summary session=%s", session.session_id)
         trace = Trace(
             "summary_complete",
             "chain",
