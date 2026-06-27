@@ -62,6 +62,29 @@ export interface Message {
   text: string;
 }
 
+// ---------------------------------------------------------------------------
+// WebSocket protocol types
+// ---------------------------------------------------------------------------
+
+export type WSClientMessage =
+  | { type: "start" }
+  | { type: "stop" }
+  | { type: "text"; message: string };
+
+export type WSServerMessage =
+  | { type: "session_id"; id: string }
+  | { type: "agent_text"; text: string }
+  | { type: "fields_update"; fields: ExtractedFields }
+  | { type: "state_update"; current_node: IntakeState; call_complete: boolean }
+  | { type: "summary"; summary: PreVisitSummary | null }
+  | {
+      type: "handoff";
+      handoff_triggered: boolean;
+      severity: string | null;
+      reason: string | null;
+    }
+  | { type: "error"; message: string };
+
 export const STATE_LABELS: Record<IntakeState, string> = {
   greeting: "Greeting",
   identity: "Identity",

@@ -415,3 +415,26 @@ body,
 .status-value {
   font-weight: 500;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Mode toggle                                                        */
+/* ------------------------------------------------------------------ */
+.btn-mode-toggle {
+  margin-top: 16px;
+  width: 100%;
+  background: var(--surface-alt);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.btn-mode-toggle:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}

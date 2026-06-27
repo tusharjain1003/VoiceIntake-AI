@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.fsm.runner import run_turn
@@ -8,6 +8,7 @@ from backend.session.models import (
     TextIntakeRequest,
     TextIntakeResponse,
 )
+from backend.ws.handler import handle_intake_ws
 
 app = FastAPI(title="VoiceIntake AI", version="0.1.0")
 
@@ -88,3 +89,8 @@ def text_intake(session_id: str, body: TextIntakeRequest) -> TextIntakeResponse:
         red_flag_id=result.red_flag_id,
         handoff_reason=result.handoff_reason,
     )
+
+
+@app.websocket("/ws/intake/{session_id}")
+async def ws_intake(websocket: WebSocket, session_id: str) -> None:
+    await handle_intake_ws(websocket, session_id)

@@ -5,13 +5,17 @@ import HandoffBanner from "./components/HandoffBanner";
 import SessionHeader from "./components/SessionHeader";
 import SummaryView from "./components/SummaryView";
 import TranscriptPanel from "./components/TranscriptPanel";
+import useIntakeSocket from "./useIntakeSocket";
 import type {
   ExtractedFields,
   IntakeState,
   Message,
   PreVisitSummary,
+  WSServerMessage,
 } from "./types";
 import "./App.css";
+
+type Mode = "rest" | "ws";
 
 export default function App() {
   const [sessionId, setSessionId] = useState("new");
@@ -35,10 +39,100 @@ export default function App() {
   const [handoffTriggered, setHandoffTriggered] = useState(false);
   const [redFlagSeverity, setRedFlagSeverity] = useState<string | null>(null);
   const [handoffReason, setHandoffReason] = useState<string | null>(null);
+  const [mode, setMode] = useState<Mode>("ws");
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
-  const handleNewSession = useCallback(() => {
+  // Shared state update helpers used by both REST and WS paths
+  const applyResponse = useCallback(
+    (res: {
+      current_node: IntakeState;
+      extracted_fields: ExtractedFields;
+      call_complete: boolean;
+      final_summary: PreVisitSummary | null;
+      handoff_triggered: boolean;
+      red_flag_severity: string | null;
+      handoff_reason: string | null;
+      assistant_message: string;
+    }) => {
+      setCurrentState(res.current_node);
+      setFields(res.extracted_fields);
+      setCallComplete(res.call_complete);
+      if (res.final_summary) setSummary(res.final_summary);
+      setHandoffTriggered(res.handoff_triggered);
+      setRedFlagSeverity(res.red_flag_severity);
+      setHandoffReason(res.handoff_reason);
+
+      const assistantMsg: Message = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        text: res.assistant_message,
+      };
+      setMessages((prev) => [...prev, assistantMsg]);
+    },
+    [],
+  );
+
+  // Handle incoming WebSocket messages
+  const handleWsMessage = useCallback(
+    (msg: WSServerMessage) => {
+      if (msg.type === "session_id") {
+        setSessionId(msg.id);
+        sessionIdRef.current = msg.id;
+        return;
+      }
+
+      if (msg.type === "agent_text") {
+        const aiMsg: Message = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: msg.text,
+        };
+        setMessages((prev) => [...prev, aiMsg]);
+        return;
+      }
+
+      if (msg.type === "fields_update") {
+        setFields(msg.fields);
+        return;
+      }
+
+      if (msg.type === "state_update") {
+        setCurrentState(msg.current_node);
+        setCallComplete(msg.call_complete);
+        return;
+      }
+
+      if (msg.type === "summary") {
+        if (msg.summary) setSummary(msg.summary);
+        return;
+      }
+
+      if (msg.type === "handoff") {
+        setHandoffTriggered(msg.handoff_triggered);
+        setRedFlagSeverity(msg.severity);
+        setHandoffReason(msg.reason);
+        return;
+      }
+
+      if (msg.type === "error") {
+        const errMsg: Message = {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          text: `Error: ${msg.message}`,
+        };
+        setMessages((prev) => [...prev, errMsg]);
+        return;
+      }
+    },
+    [],
+  );
+
+  const { status: wsStatus, connect, sendText, disconnect } = useIntakeSocket({
+    onMessage: handleWsMessage,
+  });
+
+  const resetState = useCallback(() => {
     setSessionId("new");
     setCurrentState("greeting");
     setMessages([]);
@@ -62,6 +156,11 @@ export default function App() {
     setHandoffReason(null);
   }, []);
 
+  const handleNewSession = useCallback(() => {
+    disconnect();
+    resetState();
+  }, [disconnect, resetState]);
+
   const handleSend = useCallback(async () => {
     const msg = input.trim();
     if (!msg || loading) return;
@@ -76,6 +175,21 @@ export default function App() {
     setLoading(true);
 
     try {
+      // WebSocket path
+      if (mode === "ws") {
+        if (wsStatus === "connected") {
+          sendText(msg);
+          setLoading(false);
+          return;
+        }
+        // Not connected — try connecting, then fall through to REST
+        const sid =
+          sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
+        connect(sid);
+        // Fall through to REST for this message; next messages will use WS
+      }
+
+      // REST fallback
       const sid =
         sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
       const res = await sendMessage(sid, msg);
@@ -85,20 +199,12 @@ export default function App() {
         sessionIdRef.current = res.session_id;
       }
 
-      setCurrentState(res.current_node);
-      setFields(res.extracted_fields);
-      setCallComplete(res.call_complete);
-      if (res.final_summary) setSummary(res.final_summary);
-      setHandoffTriggered(res.handoff_triggered);
-      setRedFlagSeverity(res.red_flag_severity);
-      setHandoffReason(res.handoff_reason);
+      // Reconnect WebSocket now that we have a real session id
+      if (mode === "ws" && wsStatus !== "connected") {
+        connect(res.session_id);
+      }
 
-      const assistantMsg: Message = {
-        id: crypto.randomUUID(),
-        role: "assistant",
-        text: res.assistant_message,
-      };
-      setMessages((prev) => [...prev, assistantMsg]);
+      applyResponse(res);
     } catch (err) {
       const errorMsg: Message = {
         id: crypto.randomUUID(),
@@ -112,7 +218,11 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading]);
+  }, [input, loading, mode, wsStatus, sendText, connect, applyResponse]);
+
+  const toggleMode = useCallback(() => {
+    setMode((prev) => (prev === "ws" ? "rest" : "ws"));
+  }, []);
 
   return (
     <div className="app">
@@ -159,7 +269,19 @@ export default function App() {
               <span className="status-label">Messages</span>
               <span className="status-value">{messages.length}</span>
             </div>
+            <div className="status-item">
+              <span className="status-label">Mode</span>
+              <span className="status-value">{mode.toUpperCase()}</span>
+            </div>
+            <div className="status-item">
+              <span className="status-label">WS Status</span>
+              <span className="status-value">{wsStatus}</span>
+            </div>
           </div>
+
+          <button className="btn-mode-toggle" onClick={toggleMode}>
+            Switch to {mode === "ws" ? "REST" : "WebSocket"}
+          </button>
         </aside>
       </main>
     </div>
