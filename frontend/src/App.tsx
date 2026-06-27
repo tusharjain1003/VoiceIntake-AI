@@ -265,32 +265,43 @@ export default function App() {
 
     try {
       if (mode === "ws") {
-        if (wsStatus === "connected") {
-          sendText(msg);
-          setLoading(false);
-          return;
+        if (wsStatus !== "connected") {
+          const sid =
+            sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
+          connect(sid);
+          const connected = await waitForWsOpen();
+          if (!connected) {
+            const errorMsg: Message = {
+              id: crypto.randomUUID(),
+              role: "assistant",
+              text: "Error: WebSocket did not connect. Please switch to REST or try again.",
+            };
+            setMessages((prev) => [...prev, errorMsg]);
+            setOrbState("idle");
+            return;
+          }
         }
+
+        sendText(msg);
+        setOrbState("idle");
+        return;
+      }
+
+      if (mode === "rest") {
         const sid =
           sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
-        connect(sid);
+        const res = await sendMessage(sid, msg);
+
+        if (sessionIdRef.current === "new") {
+          setSessionId(res.session_id);
+          sessionIdRef.current = res.session_id;
+        }
+
+        applyResponse(res);
+        setOrbState("speaking");
+        setTimeout(() => setOrbState((prev) => (prev === "speaking" ? "idle" : prev)), 800);
+        return;
       }
-
-      const sid =
-        sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
-      const res = await sendMessage(sid, msg);
-
-      if (sessionIdRef.current === "new") {
-        setSessionId(res.session_id);
-        sessionIdRef.current = res.session_id;
-      }
-
-      if (mode === "ws" && wsStatus !== "connected") {
-        connect(res.session_id);
-      }
-
-      applyResponse(res);
-      setOrbState("speaking");
-      setTimeout(() => setOrbState((prev) => (prev === "speaking" ? "idle" : prev)), 800);
     } catch (err) {
       const errorMsg: Message = {
         id: crypto.randomUUID(),
@@ -305,7 +316,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [input, loading, mode, wsStatus, sendText, connect, applyResponse]);
+  }, [input, loading, mode, wsStatus, sendText, connect, waitForWsOpen, applyResponse]);
 
   const handleStartVoice = useCallback(async () => {
     if (orbState !== "idle") return;
