@@ -213,6 +213,18 @@ def write_report(summary: EvalSummary, path: str) -> None:
         f"| P95 turn latency (ms) | {summary.p95_latency_ms:.2f} |",
         f"| Latency std dev (ms) | {summary.stdev_latency_ms:.2f} |",
         "",
+        (
+            "Latency values in this report are text-only FSM simulation timings. "
+            "They do not include browser microphone capture, Deepgram STT, network latency, "
+            "LLM calls, or ElevenLabs TTS."
+        ),
+        "",
+        (
+            "CRITICAL red-flag scenarios intentionally prioritize immediate handoff over "
+            "collecting every remaining intake field. Lower field accuracy in those scenarios "
+            "is expected when escalation occurs before later nodes are visited."
+        ),
+        "",
         "## Scenario Breakdown",
         "",
         "| Scenario | Runs | Completion Rate | Field Accuracy | Handoffs | Escalations |",

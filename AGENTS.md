@@ -68,6 +68,8 @@ The escalation engine automatically flags these keywords and triggers handoff:
 
 CRITICAL severity → immediate handoff, session stops. HIGH severity → flag recorded, intake continues, flag included in summary.
 
+For evals and reporting, lower field extraction accuracy on CRITICAL scenarios is expected when the handoff fires before later intake nodes are visited. Patient safety and immediate escalation take priority over completing the remaining intake fields.
+
 ## Guardrails
 
 Always use the predefined categories in `DECISIONS.md`. Never add new categories without updating that file.

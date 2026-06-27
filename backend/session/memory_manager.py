@@ -37,6 +37,9 @@ class MemorySessionManager:
     async def get_session(self, session_id: str) -> Optional[SessionData]:
         return self._sessions.get(session_id)
 
+    async def list_recent_sessions(self, limit: int = 20) -> list[SessionData]:
+        return list(reversed(list(self._sessions.values())))[0:limit]
+
     async def update_session(self, session: SessionData) -> None:
         if session.session_id not in self._sessions:
             raise SessionStoreUnavailableError(

@@ -310,7 +310,11 @@ export default function App() {
   const handleStartVoice = useCallback(async () => {
     if (orbState !== "idle") return;
 
-    if (mode === "ws" && wsStatus !== "connected") {
+    if (mode !== "ws") {
+      setMode("ws");
+    }
+
+    if (wsStatus !== "connected") {
       const sid =
         sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
       connect(sid);

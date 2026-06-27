@@ -608,7 +608,18 @@ async def _send_latency(
             "Session store unavailable — latency not persisted session=%s",
             session.session_id,
         )
-    await repo.save_latency_event(session.session_id, timing.turn_counter, client_data["metrics"])
+    try:
+        await repo.save_latency_event(
+            session.session_id,
+            timing.turn_counter,
+            client_data["metrics"],
+        )
+    except Exception:
+        logger.warning(
+            "Postgres latency persistence error session=%s",
+            session.session_id,
+            exc_info=True,
+        )
     trace = Trace(
         "latency_event",
         "tool",

@@ -156,7 +156,7 @@ The eval harness simulates patients end-to-end through the FSM (text only):
 PYTHONPATH=. uv run python -m backend.evals.run_evals --runs 50
 ```
 
-This runs 11 patient scenarios × 50 repetitions each:
+This runs 12 patient scenarios × 50 repetitions each:
 - Standard checkup, chest pain (red flag), suicidal ideation, elderly with multiple conditions, many medications, parent calling for child, patient corrections, vague patient, and more.
 
 Output:
@@ -167,6 +167,26 @@ Output:
 Flags:
 - `--runs N` — runs per scenario (default: 50)
 - `--output-dir PATH` — output directory (default: `backend/evals/`)
+
+## Eval Results
+
+Latest text-only simulation: 120 runs across 12 deterministic scenarios.
+
+| Metric | Value |
+|---|---:|
+| Completion rate | 100.0% |
+| Escalation precision | 100.0% |
+| Escalation recall | 100.0% |
+| Field extraction accuracy | 92.8% |
+| Unsafe response rate | 0.0% |
+
+The eval harness latency numbers are FSM/text simulation timings only. They do not include browser microphone capture, Deepgram STT, network latency, LLM calls, or ElevenLabs TTS, so they are not representative of live voice performance.
+
+CRITICAL red-flag scenarios intentionally prioritize immediate handoff over completing every remaining intake field. Lower field accuracy in those scenarios is expected when the escalation fires before later nodes are visited.
+
+## Latency
+
+Real voice-session latency should be measured separately from the eval harness. Capture per-turn logs from live UI sessions before reporting STT, TTS, or total voice latency numbers.
 
 ## How to Run Smoke Tests
 

@@ -67,6 +67,26 @@ class RedisSessionManager:
             logger.warning("Failed to deserialize session %s: %s", session_id, exc)
             return None
 
+    async def list_recent_sessions(self, limit: int = 20) -> list[SessionData]:
+        if redis_client is None:
+            raise SessionStoreUnavailableError("Redis is not connected — cannot list sessions.")
+        try:
+            keys = await redis_client.keys(f"{_SESSION_KEY_PREFIX}*")
+        except Exception as exc:
+            raise SessionStoreUnavailableError(
+                f"Failed to list sessions from Redis: {exc}"
+            ) from exc
+
+        sessions: list[SessionData] = []
+        for key in keys:
+            session_id = str(key).removeprefix(_SESSION_KEY_PREFIX)
+            session = await self.get_session(session_id)
+            if session is not None:
+                sessions.append(session)
+
+        sessions.sort(key=lambda session: session.turn_count, reverse=True)
+        return sessions[:limit]
+
     async def update_session(self, session: SessionData) -> None:
         if redis_client is None:
             raise SessionStoreUnavailableError("Redis is not connected — cannot update session.")

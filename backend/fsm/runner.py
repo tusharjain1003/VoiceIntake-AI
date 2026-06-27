@@ -149,6 +149,42 @@ _NEGATIVE = re.compile(
     r"^(?:no|nope|wrong|incorrect|not\s+right|not\s+correct|that'?s?\s+not)\b", re.IGNORECASE
 )
 
+_NO_ALLERGIES = re.compile(
+    r"\b(?:"
+    r"no\s+(?:known\s+)?allerg(?:ies|y)"
+    r"|none"
+    r"|nothing"
+    r"|don'?t\s+have\s+(?:any\s+)?allerg(?:ies|y)"
+    r"|do\s+not\s+have\s+(?:any\s+)?allerg(?:ies|y)"
+    r"|not\s+allergic\s+to\s+anything"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_NO_MEDICATIONS = re.compile(
+    r"\b(?:"
+    r"no\s+(?:current\s+)?(?:medications?|meds|medicine|prescriptions?)"
+    r"|none"
+    r"|nothing"
+    r"|not\s+taking\s+(?:any\s+)?(?:medications?|meds|medicine|prescriptions?)"
+    r"|don'?t\s+take\s+(?:any\s+)?(?:medications?|meds|medicine|prescriptions?)"
+    r"|do\s+not\s+take\s+(?:any\s+)?(?:medications?|meds|medicine|prescriptions?)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def _clean_name_candidate(value: str) -> str:
+    value = value.strip().strip(".,")
+    value = re.split(
+        r"\s*,?\s*(?:dob|date\s+of\s+birth|born)\b",
+        value,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0]
+    value = re.split(r"\s*,\s*\d{1,2}[/-]\d{1,2}[/-]\d{4}", value, maxsplit=1)[0]
+    return value.strip().strip(".,")
+
 
 # ---------------------------------------------------------------------------
 # Per-node extraction functions
@@ -160,12 +196,13 @@ def _extract_for_greeting(
     for pat in _NAME_PATTERNS:
         m = pat.search(message)
         if m:
-            name = m.group(1).strip()
+            name = _clean_name_candidate(m.group(1))
             break
     if not name:
-        words = message.strip().split()
+        candidate = _clean_name_candidate(message)
+        words = candidate.split()
         if len(words) >= 2:
-            name = message.strip()
+            name = candidate
     if name:
         fields.patient_name = FieldValue(
             value=name, confidence=0.8, source_turn_id=turn_id, confirmed=False
@@ -191,10 +228,12 @@ def _extract_for_identity(
         for pat in _NAME_PATTERNS:
             m = pat.search(message)
             if m:
-                name = m.group(1).strip()
+                name = _clean_name_candidate(m.group(1))
                 break
-        if not name and len(message.strip().split()) >= 2:
-            name = message.strip()
+        if not name:
+            candidate = _clean_name_candidate(message)
+            if len(candidate.split()) >= 2:
+                name = candidate
         if name:
             fields.patient_name = FieldValue(
                 value=name, confidence=0.8, source_turn_id=turn_id, confirmed=False
@@ -249,11 +288,9 @@ def _extract_for_allergies(
     text = message.strip()
     if not text:
         return fields, False
-    if re.search(r"\bno\s+(?:known\s+)?allerg(?:ies|y)", text, re.IGNORECASE) or re.search(
-        r"\bnone\b", text, re.IGNORECASE
-    ):
+    if _NO_ALLERGIES.search(text):
         fields.allergies = FieldValue(
-            value="No known allergies", confidence=0.9, source_turn_id=turn_id, confirmed=False
+            value="No known allergies", confidence=1.0, source_turn_id=turn_id, confirmed=False
         )
     else:
         fields.allergies = FieldValue(
@@ -268,11 +305,9 @@ def _extract_for_medications(
     text = message.strip()
     if not text:
         return fields, False
-    if re.search(
-        r"\bno\s+(?:medications?|meds|medicine|prescriptions?)\b", text, re.IGNORECASE
-    ) or re.search(r"\b(?:not\s+)?none\b", text, re.IGNORECASE):
+    if _NO_MEDICATIONS.search(text):
         fields.medications = FieldValue(
-            value="No current medications", confidence=0.9, source_turn_id=turn_id, confirmed=False
+            value="No current medications", confidence=1.0, source_turn_id=turn_id, confirmed=False
         )
     else:
         fields.medications = FieldValue(
