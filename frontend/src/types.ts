@@ -84,7 +84,8 @@ export type WSServerMessage =
       reason: string | null;
     }
   | { type: "error"; message: string }
-  | { type: "audio_debug"; bytes_received: number };
+  | { type: "audio_debug"; bytes_received: number }
+  | { type: "transcript"; text: string; is_final: boolean };
 
 export type OrbState = "idle" | "listening" | "processing" | "speaking" | "handoff";
 

@@ -15,9 +15,11 @@ Message types (server → client):
   {"type":"summary","summary":{...}|null}
   {"type":"handoff","handoff_triggered":bool,"severity":"...","reason":"..."}
   {"type":"audio_debug","bytes_received":int}
+  {"type":"transcript","text":"...","is_final":bool}
   {"type":"error","message":"..."}
 """
 
+import asyncio
 import json
 import logging
 import time
@@ -25,20 +27,22 @@ from typing import Any, Optional
 
 from fastapi import WebSocket
 
+from backend.config import settings
 from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.runner import run_turn
 from backend.session.manager import session_manager
 from backend.session.models import IntakeState
+from backend.voice.deepgram_client import DeepgramStreamClient
 
 logger = logging.getLogger(__name__)
 
-_AUDIO_DEBUG_INTERVAL = 5  # seconds between audio_debug events
+_AUDIO_DEBUG_INTERVAL = 5
 
 
 async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
 
-    # Resolve session — "new" creates a fresh one
+    # Resolve session
     if session_id == "new":
         session_id = session_manager.create_session()
         await _send_json(websocket, {"type": "session_id", "id": session_id})
@@ -54,65 +58,94 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
 
     session = session_manager.get_or_create_session(session_id)
 
+    # Deepgram is started lazily — only when the first binary audio frame arrives.
+    dg: Optional[DeepgramStreamClient] = None
+    _dg_started = False
+
     audio_bytes = 0
     last_debug_ts = time.monotonic()
 
     try:
         while True:
-            event = await websocket.receive()
+            ws_task = asyncio.create_task(websocket.receive())
+            dg_task = asyncio.create_task(dg.read_event()) if dg and dg.available else None
+
+            tasks = [t for t in (ws_task, dg_task) if t is not None]
+            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+
             now = time.monotonic()
 
-            # Binary frame — WebM/Opus audio chunk from MediaRecorder
-            if "bytes" in event:
-                chunk = event["bytes"]
-                audio_bytes += len(chunk)
-                logger.info("audio chunk: %d bytes (total: %d)", len(chunk), audio_bytes)
+            # Process Deepgram event
+            if dg_task and dg_task in done:
+                await _handle_dg_event(websocket, session, dg_task.result())
 
-                # Send periodic debug event
-                if now - last_debug_ts >= _AUDIO_DEBUG_INTERVAL:
-                    await _send_json(
-                        websocket,
-                        {"type": "audio_debug", "bytes_received": audio_bytes},
-                    )
-                    last_debug_ts = now
-                continue
+            # Process WebSocket event
+            if ws_task in done:
+                event = ws_task.result()
 
-            # Text frame — must be valid JSON
-            if "text" not in event:
-                continue
+                if "bytes" in event:
+                    chunk = event["bytes"]
+                    audio_bytes += len(chunk)
+                    logger.info("audio chunk: %d bytes (total: %d)", len(chunk), audio_bytes)
 
-            try:
-                raw = json.loads(event["text"])
-            except json.JSONDecodeError:
-                await _send_json(
-                    websocket,
-                    {"type": "error", "message": "Invalid JSON"},
-                )
-                continue
+                    # Lazy-start Deepgram on the first binary frame
+                    if settings.deepgram_api_key and not _dg_started:
+                        _dg_started = True
+                        dg = DeepgramStreamClient(
+                            api_key=settings.deepgram_api_key,
+                            model=settings.deepgram_model,
+                            language=settings.deepgram_language,
+                        )
+                        # Fire-and-forget — Deepgram runs in its own task until
+                        # the WS session ends or it encounters an error.
+                        asyncio.create_task(dg.start())
 
-            msg_type = raw.get("type")
+                    if dg and dg.available:
+                        await dg.send(chunk)
 
-            if msg_type == "start":
-                await _handle_start(websocket, session)
+                    if now - last_debug_ts >= _AUDIO_DEBUG_INTERVAL:
+                        await _send_json(
+                            websocket,
+                            {"type": "audio_debug", "bytes_received": audio_bytes},
+                        )
+                        last_debug_ts = now
 
-            elif msg_type == "text":
-                await _handle_text(websocket, session, raw.get("message", ""))
+                elif "text" in event:
+                    try:
+                        raw = json.loads(event["text"])
+                    except json.JSONDecodeError:
+                        await _send_json(
+                            websocket,
+                            {"type": "error", "message": "Invalid JSON"},
+                        )
+                        continue
 
-            elif msg_type == "stop":
-                break
+                    msg_type = raw.get("type")
 
-            else:
-                await _send_json(
-                    websocket,
-                    {
-                        "type": "error",
-                        "message": f"Unknown message type: {msg_type}",
-                    },
-                )
+                    if msg_type == "start":
+                        await _handle_start(websocket, session)
+                    elif msg_type == "text":
+                        await _handle_text(websocket, session, raw.get("message", ""))
+                    elif msg_type == "stop":
+                        break
+                    else:
+                        await _send_json(
+                            websocket,
+                            {
+                                "type": "error",
+                                "message": f"Unknown message type: {msg_type}",
+                            },
+                        )
+
+            # Cancel leftover pending tasks
+            for task in pending:
+                task.cancel()
 
     except Exception:
         pass
     finally:
+        if dg:
+            await dg.close()
         try:
             await websocket.close()
         except Exception:
@@ -120,7 +153,38 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers
+# Deepgram event handler
+# ---------------------------------------------------------------------------
+
+
+async def _handle_dg_event(
+    websocket: WebSocket,
+    session: Any,
+    event: tuple,
+) -> None:
+    event_type = event[0]
+
+    if event_type == "transcript":
+        _, text, is_final = event
+        if not text.strip():
+            return
+        if is_final:
+            await _handle_text(websocket, session, text)
+        else:
+            await _send_json(
+                websocket,
+                {"type": "transcript", "text": text, "is_final": False},
+            )
+
+    elif event_type == "error":
+        await _send_json(
+            websocket,
+            {"type": "error", "message": "STT unavailable"},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers (shared with REST endpoint via _handle_text)
 # ---------------------------------------------------------------------------
 
 
@@ -176,7 +240,6 @@ async def _handle_text(
 
     new_node = IntakeState(result.next_node) if result.next_node else IntakeState.COMPLETE
 
-    # Persist updated session
     session.current_node = new_node
     session.extracted_fields = result.fields
     session.call_complete = result.call_complete
@@ -188,7 +251,6 @@ async def _handle_text(
     session.handoff_reason = result.handoff_reason
     session_manager.update_session(session)
 
-    # Send structured responses
     await _send_json(
         websocket,
         {"type": "agent_text", "text": result.assistant_message},
