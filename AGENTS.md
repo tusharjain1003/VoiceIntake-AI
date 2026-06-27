@@ -12,12 +12,18 @@ Instructions for automated coding assistants working on VoiceIntake AI.
 - **No diagnosis/treatment**: If the model attempts to respond clinically, the guardrail layer must intercept and trigger handoff.
 - **Testing**: `pytest` for backend, `vitest` for frontend. Unit test every FSM state transition.
 
+## Infrastructure
+
+Postgres (pgvector) + Redis run via docker-compose:
+```bash
+docker-compose up -d
+```
+
 ## Running
 
-### Backend
+### Backend (from repo root)
 ```bash
-cd backend
-uv run uvicorn voiceintake.main:app --reload
+PYTHONPATH=. uv run uvicorn backend.main:app --reload
 ```
 
 ### Frontend
@@ -31,4 +37,5 @@ npm run dev
 1. Run `ruff check` and `ruff format --check` on Python code.
 2. Run `npm run lint` and `npm run typecheck` on frontend.
 3. Ensure new FSM states have corresponding unit tests.
-4. Update this file if workflows change.
+4. Run `uv sync` after any pyproject.toml change to keep lockfile fresh.
+5. Update this file if workflows change.

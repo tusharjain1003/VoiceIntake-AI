@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     elevenlabs_model: str = "eleven_multilingual_v2"
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/voiceintake"
+    session_ttl_seconds: int = 3600
     log_level: str = "info"
     langsmith_api_key: str = ""
     langsmith_project: str = ""

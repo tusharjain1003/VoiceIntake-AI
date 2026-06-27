@@ -1,13 +1,13 @@
 """
 WebSocket handler for the realtime intake protocol.
 
-Message types (client → server):
+Message types (client -> server):
   {"type":"text","message":"..."}
   {"type":"start"}
   {"type":"stop"}
   Binary frames (WebM/Opus audio chunks via MediaRecorder)
 
-Message types (server → client):
+Message types (server -> client):
   {"type":"session_id","id":"..."}
   {"type":"agent_text","text":"..."}
   {"type":"fields_update","fields":{...}}
@@ -48,10 +48,10 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
     await websocket.accept()
 
     if session_id == "new":
-        session_id = session_manager.create_session()
+        session_id = await session_manager.create_session()
         await _send_json(websocket, {"type": "session_id", "id": session_id})
     else:
-        session = session_manager.get_session(session_id)
+        session = await session_manager.get_session(session_id)
         if session is None:
             await _send_json(
                 websocket,
@@ -60,7 +60,7 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
             await websocket.close()
             return
 
-    session = session_manager.get_or_create_session(session_id)
+    session = await session_manager.get_or_create_session(session_id)
 
     dg: Optional[DeepgramStreamClient] = None
     _dg_started = False
@@ -243,7 +243,7 @@ async def _handle_text(
     session.red_flag_severity = result.red_flag_severity
     session.red_flag_id = result.red_flag_id
     session.handoff_reason = result.handoff_reason
-    session_manager.update_session(session)
+    await session_manager.update_session(session)
 
     await _send_json(websocket, {"type": "agent_text", "text": result.assistant_message})
 
@@ -289,7 +289,7 @@ async def _send_latency(
     client_data = timing.to_client_dict()
     await _send_json(websocket, {"type": "latency", **client_data})
     session.latency_logs.append({"turn_number": timing.turn_counter, **client_data["metrics"]})
-    session_manager.update_session(session)
+    await session_manager.update_session(session)
     timing.reset_utterance()
 
 
