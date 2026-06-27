@@ -1,7 +1,7 @@
 """Aggregate metrics for eval runs."""
 
 from dataclasses import dataclass, field
-from statistics import median, stdev
+from statistics import stdev
 from typing import Optional
 
 

@@ -20,7 +20,8 @@ def get_response(
     *confirmation_visits* tracks how many times we have visited the
     confirmation node so that correction responses are sent only once.
     """
-    if current_node in (IntakeState.COMPLETE.value, IntakeState.SUMMARY.value, IntakeState.HANDOFF.value):
+    terminal = {IntakeState.COMPLETE.value, IntakeState.SUMMARY.value, IntakeState.HANDOFF.value}
+    if current_node in terminal:
         return ""
 
     if current_node == IntakeState.CONFIRMATION.value:

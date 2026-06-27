@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef, useState, type FormEvent } from "react";
 import { sendMessage } from "./api";
 import FieldsPanel from "./components/FieldsPanel";
 import HandoffBanner from "./components/HandoffBanner";
@@ -50,7 +50,6 @@ export default function App() {
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
-  // Shared state update helpers used by both REST and WS paths
   const applyResponse = useCallback(
     (res: {
       current_node: IntakeState;
@@ -80,7 +79,6 @@ export default function App() {
     [],
   );
 
-  // Handle incoming WebSocket messages
   const ttsActiveRef = useRef(false);
 
   const handleTtsPlaying = useCallback((playing: boolean) => {
@@ -138,7 +136,6 @@ export default function App() {
       }
 
       if (msg.type === "tts_end") {
-        // Audio playback is handled by the hook via onTtsPlaying
         return;
       }
 
@@ -155,7 +152,6 @@ export default function App() {
       }
 
       if (msg.type === "transcript") {
-        // Partial transcripts — could display in a future overlay
         return;
       }
 
@@ -226,7 +222,6 @@ export default function App() {
     setOrbState("processing");
 
     try {
-      // WebSocket path
       if (mode === "ws") {
         if (wsStatus === "connected") {
           sendText(msg);
@@ -238,7 +233,6 @@ export default function App() {
         connect(sid);
       }
 
-      // REST fallback
       const sid =
         sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
       const res = await sendMessage(sid, msg);
@@ -274,12 +268,10 @@ export default function App() {
   const handleStartVoice = useCallback(async () => {
     if (orbState !== "idle") return;
 
-    // Ensure WebSocket is connected
     if (mode === "ws" && wsStatus !== "connected") {
       const sid =
         sessionIdRef.current === "new" ? "new" : sessionIdRef.current;
       connect(sid);
-      // Give the connection a moment to establish
       await new Promise((r) => setTimeout(r, 300));
     }
 
@@ -295,6 +287,11 @@ export default function App() {
   const toggleMode = useCallback(() => {
     setMode((prev) => (prev === "ws" ? "rest" : "ws"));
   }, []);
+
+  const handleTextSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    handleSend();
+  };
 
   return (
     <div className="app">
@@ -312,21 +309,16 @@ export default function App() {
         </aside>
 
         <section className="panel panel--center">
-          <TranscriptPanel
-            messages={messages}
-            input={input}
-            onInputChange={setInput}
-            onSend={handleSend}
-            disabled={callComplete || loading}
-          />
+          <TranscriptPanel messages={messages} />
         </section>
 
         <aside className="panel panel--right">
           {handoffTriggered && (
             <HandoffBanner severity={redFlagSeverity} reason={handoffReason} />
           )}
+
           <div className="status-panel">
-            <h2 className="panel-title">Status</h2>
+            <h2 className="panel-title">Session</h2>
             <div className="status-item">
               <span className="status-label">Current Node</span>
               <span className="status-value">{currentState}</span>
@@ -361,6 +353,28 @@ export default function App() {
             onStop={handleStopVoice}
             disabled={callComplete}
           />
+
+          <form className="text-fallback-area" onSubmit={handleTextSubmit}>
+            <input
+              className="input-field"
+              type="text"
+              placeholder={callComplete ? "Session complete" : "Type as fallback..."}
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={callComplete}
+            />
+            <button
+              className="btn-send"
+              type="submit"
+              disabled={callComplete || loading || !input.trim()}
+            >
+              {loading ? "..." : "Send"}
+            </button>
+          </form>
+
+          <button className="btn-reset-session" onClick={handleNewSession}>
+            Reset Session
+          </button>
 
           <button className="btn-mode-toggle" onClick={toggleMode}>
             Switch to {mode === "ws" ? "REST" : "WebSocket"}

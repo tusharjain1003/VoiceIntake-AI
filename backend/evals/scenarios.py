@@ -95,7 +95,9 @@ SCENARIOS: list[Scenario] = [
     ),
     Scenario(
         name="suicidal_ideation_critical",
-        description="Patient expresses suicidal thoughts — CRITICAL escalation → immediate handoff.",
+        description=(
+            "Patient expresses suicidal thoughts — CRITICAL escalation → immediate handoff."
+        ),
         patient_responses={
             "greeting": "Taylor Morgan, 09/09/1999",
             "identity": "09/09/1999",
@@ -175,15 +177,15 @@ SCENARIOS: list[Scenario] = [
             "symptoms": "I've been feeling dizzy for about two weeks.",
             "history": "Type 2 diabetes, hypertension, high cholesterol.",
             "allergies": "Sulfa drugs.",
-            "medications": "Metformin 500mg twice daily, Lisinopril 20mg, Atorvastatin 40mg, and low-dose aspirin.",
+            "medications": "Metformin 500mg, Lisinopril 20mg, Atorvastatin 40mg, aspirin.",
             "visit_reason": "To review my medications with the doctor.",
             "confirmation": "yes",
         },
         expected_fields={
-            "patient_name": "Priya Sharma",
+            "patient_name": "Emily Chen",
             "date_of_birth": "02/28/1965",
             "medical_history": "Type 2 diabetes, hypertension, high cholesterol.",
-            "medications": "Metformin 500mg twice daily, Lisinopril 20mg, Atorvastatin 40mg, and low-dose aspirin.",
+            "medications": "Metformin 500mg, Lisinopril 20mg, Atorvastatin 40mg, aspirin.",
             "allergies": "Sulfa drugs.",
             "visit_reason": "To review my medications with the doctor.",
         },
@@ -243,7 +245,7 @@ SCENARIOS: list[Scenario] = [
             "identity": "02/22/1943",
             "chief_complaint": "I've been having trouble with my balance.",
             "symptoms": "It's been getting worse over the past six months, I've fallen twice.",
-            "history": "I have diabetes, high blood pressure, glaucoma, and I had a knee replacement in 2019.",
+            "history": "Diabetes, high blood pressure, glaucoma, knee replacement in 2019.",
             "allergies": "Allergic to penicillin and codeine.",
             "medications": "Metformin, Losartan, Latanoprost eye drops, and a baby aspirin.",
             "visit_reason": "My daughter thinks I need a walker.",
@@ -254,7 +256,7 @@ SCENARIOS: list[Scenario] = [
             "date_of_birth": "02/22/1943",
             "chief_complaint": "I've been having trouble with my balance.",
             "symptom_duration": "six month",
-            "medical_history": "I have diabetes, high blood pressure, glaucoma, and I had a knee replacement in 2019.",
+            "medical_history": "Diabetes, high blood pressure, glaucoma, knee replacement in 2019.",
             "allergies": "Allergic to penicillin and codeine.",
             "medications": "Metformin, Losartan, Latanoprost eye drops, and a baby aspirin.",
             "visit_reason": "My daughter thinks I need a walker.",

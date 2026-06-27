@@ -17,7 +17,7 @@
 **Rationale:**
 - Core logic (state transitions, guardrails, field extraction, summary generation) is independent of modality.
 - Voice adds latency, error modes (transcription noise), and browser API complexity.
-- Day 3 milestone: a working text loop that can collect a full intake and produce a summary. De-risks the project.
+- De-risks the project by proving correctness of the intake flow before adding audio.
 
 ## 3. FieldValue Metadata
 
@@ -69,3 +69,42 @@
 - ICD-10 coding requires medical coding expertise to validate.
 - EHR integration is highly vendor-specific and would dominate scope.
 - The output is a structured summary for manual clinician review — not an automated EHR submission.
+
+## 8. WebM/Opus over Raw PCM
+
+**Decision:** Use the browser's native `MediaRecorder` with `audio/webm;codecs=opus` instead of capturing raw PCM via `AudioWorklet`.
+
+**Rationale:**
+- Zero client-side audio processing code — the browser handles encoding.
+- Deepgram accepts WebM/Opus directly via its streaming API.
+- 250ms chunks provide low enough latency without complex buffering.
+- PCM capture would require custom WebAudio wiring and adds deployment risk.
+
+## 9. Deepgram over Whisper
+
+**Decision:** Use Deepgram for streaming STT instead of self-hosting Whisper.
+
+**Rationale:**
+- Deepgram handles the streaming endpoint, WebSocket framing, and diarization natively.
+- Self-hosted Whisper would require GPU infrastructure and significant ops overhead.
+- Deepgram's Nova-2 model provides accuracy competitive with Whisper Large-v3.
+- The project has no requirements for on-premise or air-gapped deployment.
+
+## 10. Medication RAG Deferred
+
+**Decision:** Medication lookup (RAG over drug database) is deferred to a future milestone.
+
+**Rationale:**
+- Core FSM logic, field extraction, and summary generation work without it.
+- Medication data would add schema and ingestion complexity without blocking the demo.
+- A simple free-text capture of "medications" suffices for the initial clinical intake loop.
+
+## 11. Text-Only Evals for Scale
+
+**Decision:** Run offline evaluations using a deterministic patient simulator over the text-only REST endpoint, without TTS/STT.
+
+**Rationale:**
+- Eliminates API costs for STT/TTS during eval runs — enables running 500+ conversations cheaply.
+- Core FSM correctness is independent of speech modality.
+- Deterministic patient responses (templates per node) make results reproducible.
+- Per-turn timing metrics capture the LLM + FSM portion of latency, which is the dominant variable.

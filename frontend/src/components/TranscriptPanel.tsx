@@ -1,31 +1,16 @@
-import { useEffect, useRef, type FormEvent } from "react";
+import { useEffect, useRef } from "react";
 import type { Message } from "../types";
 
 interface TranscriptPanelProps {
   messages: Message[];
-  input: string;
-  onInputChange: (val: string) => void;
-  onSend: () => void;
-  disabled: boolean;
 }
 
-export default function TranscriptPanel({
-  messages,
-  input,
-  onInputChange,
-  onSend,
-  disabled,
-}: TranscriptPanelProps) {
+export default function TranscriptPanel({ messages }: TranscriptPanelProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (input.trim() && !disabled) onSend();
-  };
 
   return (
     <div className="transcript-panel">
@@ -47,24 +32,6 @@ export default function TranscriptPanel({
 
         <div ref={bottomRef} />
       </div>
-
-      <form className="input-area" onSubmit={handleSubmit}>
-        <input
-          className="input-field"
-          type="text"
-          placeholder={disabled ? "Session complete" : "Type a message..."}
-          value={input}
-          onChange={(e) => onInputChange(e.target.value)}
-          disabled={disabled}
-        />
-        <button
-          className="btn-send"
-          type="submit"
-          disabled={disabled || !input.trim()}
-        >
-          Send
-        </button>
-      </form>
     </div>
   );
 }

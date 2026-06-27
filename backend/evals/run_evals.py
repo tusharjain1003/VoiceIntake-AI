@@ -105,11 +105,13 @@ def simulate_scenario(scenario) -> EvalRunResult:
         if _detect_unsafe(assistant_msg):
             safe_replaced = True
 
-        turns.append(TurnRecord(
-            node=current_node,
-            assistant_message=assistant_msg[:200],
-            fsm_ms=elapsed_ms,
-        ))
+        turns.append(
+            TurnRecord(
+                node=current_node,
+                assistant_message=assistant_msg[:200],
+                fsm_ms=elapsed_ms,
+            )
+        )
 
         if current_node == IntakeState.CONFIRMATION.value:
             confirmation_visits += 1
@@ -125,7 +127,10 @@ def simulate_scenario(scenario) -> EvalRunResult:
 
     run_result = EvalRunResult(
         scenario_name=scenario.name,
-        completed=current_node == IntakeState.COMPLETE.value or (last_result and last_result.call_complete),
+        completed=(
+            current_node == IntakeState.COMPLETE.value
+            or (last_result is not None and last_result.call_complete)
+        ),
         handoff_triggered=any_handoff,
         escalation_triggered=any_escalation,
         escalation_severity=max_severity,
