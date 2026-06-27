@@ -48,6 +48,7 @@ class PreVisitSummary(BaseModel):
     allergies: Optional[str] = None
     medications: Optional[str] = None
     visit_reason: Optional[str] = None
+    clinician_context: Optional[dict] = None
 
 
 class TextIntakeRequest(BaseModel):

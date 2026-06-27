@@ -33,6 +33,7 @@ from fastapi import WebSocket
 from backend.config import settings
 from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.runner import run_turn
+from backend.rag.enrich import enrich_summary_with_rag
 from backend.session.manager import session_manager
 from backend.session.models import IntakeState
 from backend.tracking.latency import TurnTiming
@@ -275,8 +276,9 @@ async def _handle_text(
             },
         )
 
-    if result.call_complete:
-        summary_dict = _summary_dict(result.final_summary) if result.final_summary else None
+    if result.call_complete and result.final_summary:
+        await enrich_summary_with_rag(result.final_summary, result.fields)
+        summary_dict = _summary_dict(result.final_summary)
         await _send_json(websocket, {"type": "summary", "summary": summary_dict})
 
 
@@ -360,10 +362,10 @@ def _fields_dict(fields: Any) -> dict[str, Any]:
     return out
 
 
-def _summary_dict(summary: Any) -> Optional[dict[str, Optional[str]]]:
+def _summary_dict(summary: Any) -> Optional[dict[str, Any]]:
     if summary is None:
         return None
-    return {
+    out: dict[str, Any] = {
         "patient_name": summary.patient_name,
         "date_of_birth": summary.date_of_birth,
         "chief_complaint": summary.chief_complaint,
@@ -374,3 +376,7 @@ def _summary_dict(summary: Any) -> Optional[dict[str, Optional[str]]]:
         "medications": summary.medications,
         "visit_reason": summary.visit_reason,
     }
+    ctx = getattr(summary, "clinician_context", None)
+    if ctx:
+        out["clinician_context"] = ctx
+    return out

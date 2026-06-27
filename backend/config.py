@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     elevenlabs_model: str = "eleven_multilingual_v2"
     redis_url: str = "redis://localhost:6379/0"
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/voiceintake"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_dimensions: int = 1536
     session_ttl_seconds: int = 3600
     log_level: str = "info"
     langsmith_api_key: str = ""

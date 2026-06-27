@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.config import settings
 from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.runner import run_turn
+from backend.rag.enrich import enrich_summary_with_rag
 from backend.session.manager import session_manager
 from backend.session.models import IntakeState, TextIntakeResponse
 
@@ -105,6 +106,9 @@ async def text_intake(session_id: str, body: dict) -> dict:
     session.red_flag_id = result.red_flag_id
     session.handoff_reason = result.handoff_reason
     await session_manager.update_session(session)
+
+    if result.call_complete and result.final_summary:
+        await enrich_summary_with_rag(result.final_summary, result.fields)
 
     return TextIntakeResponse(
         session_id=session.session_id,
