@@ -300,8 +300,10 @@ async def handle_intake_ws(
             await dg.close()
         try:
             await websocket.close()
-        except Exception:
+        except WebSocketDisconnect:
             pass
+        except Exception:
+            logger.debug("WebSocket close error", exc_info=True)
 
 
 # ---------------------------------------------------------------------------
@@ -550,30 +552,34 @@ async def _handle_text(
     # ------------------------------------------------------------------
     # Postgres audit persistence (best-effort, non-blocking)
     # ------------------------------------------------------------------
-    await repo.save_session(session)
-    await repo.save_transcript(session.session_id, session.turn_count, "user", message)
-    await repo.save_transcript(
-        session.session_id, session.turn_count, "assistant", result.assistant_message
-    )
-    if result.guardrail_triggered:
-        await repo.save_safety_event(
-            session.session_id,
-            session.turn_count,
-            category=result.guardrail_category or "",
-            original_text=result.guardrail_original or "",
-            replacement_text=result.assistant_message,
+    try:
+        await repo.save_session(session)
+        await repo.save_transcript(session.session_id, session.turn_count, "user", message)
+        await repo.save_transcript(
+            session.session_id, session.turn_count, "assistant", result.assistant_message
         )
-    if result.handoff_triggered and result.red_flag_id:
-        await repo.save_escalation_event(
-            session.session_id,
-            session.turn_count,
-            rule_id=result.red_flag_id,
-            severity=result.red_flag_severity or "HIGH",
-            immediate_handoff=result.red_flag_severity == "CRITICAL",
-        )
+        if result.guardrail_triggered:
+            await repo.save_safety_event(
+                session.session_id,
+                session.turn_count,
+                category=result.guardrail_category or "",
+                original_text=result.guardrail_original or "",
+                replacement_text=result.assistant_message,
+            )
+        if result.handoff_triggered and result.red_flag_id:
+            await repo.save_escalation_event(
+                session.session_id,
+                session.turn_count,
+                rule_id=result.red_flag_id,
+                severity=result.red_flag_severity or "HIGH",
+                immediate_handoff=result.red_flag_severity == "CRITICAL",
+            )
+        if result.call_complete and result.final_summary:
+            await repo.save_summary(session.session_id, result.final_summary.model_dump())
+    except Exception:
+        logger.warning("Postgres persistence error session=%s", session.session_id, exc_info=True)
 
     if result.call_complete and result.final_summary:
-        await repo.save_summary(session.session_id, result.final_summary.model_dump())
         await enrich_summary_with_rag(result.final_summary, result.fields)
         summary_dict = _summary_dict(result.final_summary)
         await _send_json(websocket, {"type": "summary", "summary": summary_dict})
@@ -598,7 +604,10 @@ async def _send_latency(
     try:
         await session_store.update_session(session)
     except SessionStoreUnavailableError:
-        pass
+        logger.warning(
+            "Session store unavailable — latency not persisted session=%s",
+            session.session_id,
+        )
     await repo.save_latency_event(session.session_id, timing.turn_counter, client_data["metrics"])
     trace = Trace(
         "latency_event",
@@ -635,8 +644,10 @@ async def _send_tts(
     await _send_json(websocket, {"type": "tts_start", "content_type": "audio/mpeg"})
     try:
         await websocket.send_bytes(audio)
+    except WebSocketDisconnect:
+        logger.debug("Client disconnected during TTS audio send")
     except Exception:
-        pass
+        logger.warning("TTS audio send failed", exc_info=True)
     await _send_json(websocket, {"type": "tts_end"})
 
     if timing:
@@ -647,8 +658,10 @@ async def _send_tts(
 async def _send_json(websocket: WebSocket, data: dict[str, Any]) -> None:
     try:
         await websocket.send_json(data)
+    except WebSocketDisconnect:
+        logger.debug("Client disconnected while sending JSON")
     except Exception:
-        pass
+        logger.warning("Unexpected send_json failure", exc_info=True)
 
 
 async def _send_audio_debug(websocket: WebSocket, stats: DgStats) -> None:
