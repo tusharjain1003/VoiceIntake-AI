@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.fsm.runner import run_turn
@@ -61,12 +61,15 @@ def text_intake(session_id: str, body: TextIntakeRequest) -> TextIntakeResponse:
         current_node_name=session.current_node.value,
         message=message,
         fields=session.extracted_fields,
+        retry_count_by_node=session.retry_count_by_node,
     )
 
     new_node = IntakeState(result.next_node) if result.next_node else IntakeState.COMPLETE
     session.current_node = new_node
     session.extracted_fields = result.fields
     session.call_complete = result.call_complete
+    if result.retry_count_by_node is not None:
+        session.retry_count_by_node = result.retry_count_by_node
     session_manager.update_session(session)
 
     return TextIntakeResponse(
