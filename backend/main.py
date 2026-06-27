@@ -17,10 +17,11 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="VoiceIntake AI", version="0.1.0")
 
+origins = settings.cors_allowed_origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=origins,
+    allow_credentials=bool(origins) and origins != ["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -55,6 +56,8 @@ async def startup() -> None:
     except SessionStoreUnavailableError as exc:
         logger.critical("Session store unavailable: %s", exc)
         raise
+
+    logger.info("CORS allowed origins: %s", origins)
 
 
 @app.on_event("shutdown")

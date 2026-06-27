@@ -86,6 +86,7 @@ cp .env.example .env
 | `LANGCHAIN_API_KEY` | Tracing | LangSmith tracing |
 | `LANGCHAIN_PROJECT` | No | LangSmith project name (default: `voiceintake-ai`) |
 | `DEV_MODE` | No | Set `true` to use in-memory session store when Redis is unavailable (for local dev without Docker) |
+| `CORS_ALLOWED_ORIGINS` | No | Comma-separated or JSON list of allowed CORS origins (default: `http://localhost:5173,http://127.0.0.1:5173`) |
 
 ### 3. Start infrastructure
 
