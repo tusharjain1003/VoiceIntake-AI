@@ -24,6 +24,7 @@ _CRITICAL_HANDOFF_MSG = (
     "If you feel you may be in immediate danger or this is an emergency, "
     "please contact local emergency services right away."
 )
+_RETRY_HANDOFF_REASON = "Could not collect required intake information after multiple attempts."
 
 
 @dataclass
@@ -920,8 +921,11 @@ def _route_to_handoff(fields: ExtractedFields, retry_count_by_node: dict[str, in
             next_node=IntakeState.HANDOFF.value,
             assistant_message=PROMPTS["handoff"],
             fields=fields,
-            call_complete=False,
+            call_complete=True,
+            final_summary=_build_summary(fields),
             retry_count_by_node=retry_count_by_node,
+            handoff_triggered=True,
+            handoff_reason=_RETRY_HANDOFF_REASON,
         )
     )
 
