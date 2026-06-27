@@ -7,6 +7,7 @@ from typing import Optional
 from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.prompts import PROMPTS
 from backend.observability.latency_tracker import LatencyTracker
+from backend.safety.guardrails import check_response_safety
 from backend.session.models import (
     ExtractedFields,
     FieldValue,
@@ -25,6 +26,16 @@ class RunResult:
     call_complete: bool
     final_summary: Optional[PreVisitSummary] = None
     retry_count_by_node: Optional[dict[str, int]] = None
+
+
+def _apply_guardrails(result: RunResult) -> RunResult:
+    """Replace *assistant_message* with a safe neutral response if the
+    guardrail classifier flags it."""
+    if result.assistant_message:
+        gr = check_response_safety(result.assistant_message)
+        if not gr.safe and gr.replacement is not None:
+            result.assistant_message = gr.replacement
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -503,11 +514,13 @@ def run_turn(
 
     node = NODE_REGISTRY.get(current_node_name)
     if node is None:
-        return RunResult(
-            next_node=None,
-            assistant_message="I'm sorry, something went wrong.",
-            fields=fields,
-            call_complete=True,
+        return _apply_guardrails(
+            RunResult(
+                next_node=None,
+                assistant_message="I'm sorry, something went wrong.",
+                fields=fields,
+                call_complete=True,
+            )
         )
 
     turn_id = str(uuid.uuid4())
@@ -521,52 +534,60 @@ def run_turn(
             )
             if retry_count_by_node[current_node_name] >= MAX_RETRIES_PER_NODE:
                 tracker.stop("run_turn")
-                return _route_to_handoff(result_fields, retry_count_by_node)
-            return RunResult(
+                return _apply_guardrails(_route_to_handoff(result_fields, retry_count_by_node))
+            return _apply_guardrails(
+                RunResult(
+                    next_node=IntakeState.CONFIRMATION.value,
+                    assistant_message="I'm sorry, I didn't understand. "
+                    + _build_confirmation_text(result_fields),
+                    fields=result_fields,
+                    call_complete=False,
+                    retry_count_by_node=retry_count_by_node,
+                )
+            )
+        retry_count_by_node[current_node_name] = 0
+        if action == "summary":
+            return _apply_guardrails(_route_to_summary(result_fields, retry_count_by_node))
+        return _apply_guardrails(
+            RunResult(
                 next_node=IntakeState.CONFIRMATION.value,
-                assistant_message="I'm sorry, I didn't understand. "
+                assistant_message="Thank you, I've updated that. "
                 + _build_confirmation_text(result_fields),
                 fields=result_fields,
                 call_complete=False,
                 retry_count_by_node=retry_count_by_node,
             )
-        retry_count_by_node[current_node_name] = 0
-        if action == "summary":
-            return _route_to_summary(result_fields, retry_count_by_node)
-        return RunResult(
-            next_node=IntakeState.CONFIRMATION.value,
-            assistant_message="Thank you, I've updated that. "
-            + _build_confirmation_text(result_fields),
-            fields=result_fields,
-            call_complete=False,
-            retry_count_by_node=retry_count_by_node,
         )
 
     if current_node_name == IntakeState.SUMMARY.value:
         fhir = _build_fhir_json(fields)
         tracker.stop("run_turn")
-        return RunResult(
-            next_node=IntakeState.COMPLETE.value,
-            assistant_message=(
-                "Thank you. Your intake is complete. "
-                "A clinician will review your information shortly.\n\n"
-                f"FHIR-lite Summary:\n{fhir}"
-            ),
-            fields=fields,
-            call_complete=True,
-            final_summary=_build_summary(fields),
-            retry_count_by_node=retry_count_by_node,
+        return _apply_guardrails(
+            RunResult(
+                next_node=IntakeState.COMPLETE.value,
+                assistant_message=(
+                    "Thank you. Your intake is complete. "
+                    "A clinician will review your information shortly.\n\n"
+                    f"FHIR-lite Summary:\n{fhir}"
+                ),
+                fields=fields,
+                call_complete=True,
+                final_summary=_build_summary(fields),
+                retry_count_by_node=retry_count_by_node,
+            )
         )
 
     if current_node_name == IntakeState.HANDOFF.value:
         tracker.stop("run_turn")
-        return RunResult(
-            next_node=IntakeState.COMPLETE.value,
-            assistant_message=PROMPTS["handoff"],
-            fields=fields,
-            call_complete=True,
-            final_summary=_build_summary(fields),
-            retry_count_by_node=retry_count_by_node,
+        return _apply_guardrails(
+            RunResult(
+                next_node=IntakeState.COMPLETE.value,
+                assistant_message=PROMPTS["handoff"],
+                fields=fields,
+                call_complete=True,
+                final_summary=_build_summary(fields),
+                retry_count_by_node=retry_count_by_node,
+            )
         )
 
     # Standard extraction nodes — always attempt extraction even on empty
@@ -580,15 +601,17 @@ def run_turn(
             )
             if retry_count_by_node[current_node_name] >= MAX_RETRIES_PER_NODE:
                 tracker.stop("run_turn")
-                return _route_to_handoff(new_fields, retry_count_by_node)
+                return _apply_guardrails(_route_to_handoff(new_fields, retry_count_by_node))
             reask = node.prompt_template
             tracker.stop("run_turn")
-            return RunResult(
-                next_node=current_node_name,
-                assistant_message=f"I didn't quite get that. {reask}",
-                fields=new_fields,
-                call_complete=False,
-                retry_count_by_node=retry_count_by_node,
+            return _apply_guardrails(
+                RunResult(
+                    next_node=current_node_name,
+                    assistant_message=f"I didn't quite get that. {reask}",
+                    fields=new_fields,
+                    call_complete=False,
+                    retry_count_by_node=retry_count_by_node,
+                )
             )
         retry_count_by_node[current_node_name] = 0
         fields = new_fields
@@ -603,30 +626,36 @@ def run_turn(
         assistant_message = next_node.prompt_template if next_node else ""
 
     tracker.stop("run_turn")
-    return RunResult(
-        next_node=next_node_name,
-        assistant_message=assistant_message,
-        fields=fields,
-        call_complete=False,
-        retry_count_by_node=retry_count_by_node,
+    return _apply_guardrails(
+        RunResult(
+            next_node=next_node_name,
+            assistant_message=assistant_message,
+            fields=fields,
+            call_complete=False,
+            retry_count_by_node=retry_count_by_node,
+        )
     )
 
 
 def _route_to_handoff(fields: ExtractedFields, retry_count_by_node: dict[str, int]) -> RunResult:
-    return RunResult(
-        next_node=IntakeState.HANDOFF.value,
-        assistant_message=PROMPTS["handoff"],
-        fields=fields,
-        call_complete=False,
-        retry_count_by_node=retry_count_by_node,
+    return _apply_guardrails(
+        RunResult(
+            next_node=IntakeState.HANDOFF.value,
+            assistant_message=PROMPTS["handoff"],
+            fields=fields,
+            call_complete=False,
+            retry_count_by_node=retry_count_by_node,
+        )
     )
 
 
 def _route_to_summary(fields: ExtractedFields, retry_count_by_node: dict[str, int]) -> RunResult:
-    return RunResult(
-        next_node=IntakeState.SUMMARY.value,
-        assistant_message="",
-        fields=fields,
-        call_complete=False,
-        retry_count_by_node=retry_count_by_node,
+    return _apply_guardrails(
+        RunResult(
+            next_node=IntakeState.SUMMARY.value,
+            assistant_message="",
+            fields=fields,
+            call_complete=False,
+            retry_count_by_node=retry_count_by_node,
+        )
     )
