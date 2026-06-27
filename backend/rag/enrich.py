@@ -95,20 +95,20 @@ async def enrich_summary_with_rag(
         )
         return
 
-    async with AsyncSessionLocal() as db:
-        try:
+    try:
+        async with AsyncSessionLocal() as db:
             results = await retrieve_all_categories(db, query_embedding, top_k_per_category=2)
-        except Exception as exc:
-            logger.warning("RAG retrieval failed — skipping enrichment: %s", exc)
-            trace.finish(
-                outputs={
-                    "status": "failed",
-                    "error": "retrieval_failed",
-                    "stage": "retrieval",
-                },
-            )
-            _mark_unavailable(summary, "retrieval_failed")
-            return
+    except Exception as exc:
+        logger.warning("RAG retrieval failed — skipping enrichment: %s", exc)
+        trace.finish(
+            outputs={
+                "status": "failed",
+                "error": "retrieval_failed",
+                "stage": "retrieval",
+            },
+        )
+        _mark_unavailable(summary, "retrieval_failed")
+        return
 
     if results:
         summary.clinician_context = results
