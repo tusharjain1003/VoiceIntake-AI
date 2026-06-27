@@ -9,6 +9,7 @@ from backend.fsm.runner import run_turn
 from backend.rag.enrich import enrich_summary_with_rag
 from backend.session.manager import session_manager
 from backend.session.models import IntakeState, TextIntakeResponse
+from backend.tracing.langsmith import Trace
 
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger(__name__)
@@ -93,6 +94,8 @@ async def text_intake(session_id: str, body: dict) -> dict:
         message=message,
         fields=session.extracted_fields,
         retry_count_by_node=session.retry_count_by_node,
+        session_id=session.session_id,
+        turn_number=session.turn_count,
     )
 
     new_node = IntakeState(result.next_node) if result.next_node else IntakeState.COMPLETE
@@ -109,6 +112,17 @@ async def text_intake(session_id: str, body: dict) -> dict:
 
     if result.call_complete and result.final_summary:
         await enrich_summary_with_rag(result.final_summary, result.fields)
+        trace = Trace(
+            "summary_complete",
+            "chain",
+            inputs={"session_id": session.session_id, "node": new_node.value},
+        )
+        trace.finish(
+            outputs={
+                "summary": result.final_summary.model_dump(),
+                "turn_count": session.turn_count,
+            }
+        )
 
     return TextIntakeResponse(
         session_id=session.session_id,

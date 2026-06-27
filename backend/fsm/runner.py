@@ -15,6 +15,7 @@ from backend.session.models import (
     IntakeState,
     PreVisitSummary,
 )
+from backend.tracing.langsmith import Trace, is_enabled
 
 MAX_RETRIES_PER_NODE = 3
 
@@ -509,11 +510,67 @@ _EXTRACTORS: dict[str, callable] = {
 }
 
 
+def _msg_snippet(val: Optional[str], max_len: int = 300) -> str:
+    return val[:max_len] if val else ""
+
+
+def _finish_outputs(result: RunResult) -> dict:
+    return {
+        "assistant_message": _msg_snippet(result.assistant_message),
+        "next_node": result.next_node or "",
+        "call_complete": result.call_complete,
+    }
+
+
+def _finish_outputs_with_summary(result: RunResult) -> dict:
+    outputs = _finish_outputs(result)
+    if result.final_summary:
+        outputs["summary"] = result.final_summary.model_dump()
+    else:
+        outputs["summary"] = None
+    return outputs
+
+
+def _add_children_for_result(
+    trace: Optional[Trace],
+    msg: str,
+    extraction: Optional[dict],
+    guardrail: Optional[dict],
+    escalation: Optional[dict],
+) -> None:
+    """Add child traces when the corresponding operation data is available."""
+    if trace is None:
+        return
+    if extraction is not None:
+        trace.child(
+            "extraction",
+            "tool",
+            inputs={"message": msg},
+            outputs=extraction,
+        )
+    if guardrail is not None:
+        trace.child(
+            "guardrail",
+            "tool",
+            inputs={"original_message_snippet": _msg_snippet(guardrail.get("original", ""))},
+            outputs=guardrail,
+        )
+    if escalation is not None:
+        trace.child(
+            "escalation",
+            "tool",
+            inputs={"message": msg},
+            outputs=escalation,
+        )
+
+
 def run_turn(
     current_node_name: str,
     message: str,
     fields: Optional[ExtractedFields] = None,
     retry_count_by_node: Optional[dict[str, int]] = None,
+    session_id: Optional[str] = None,
+    turn_number: int = 0,
 ) -> RunResult:
     tracker = LatencyTracker()
     tracker.start("run_turn")
@@ -523,9 +580,22 @@ def run_turn(
     if retry_count_by_node is None:
         retry_count_by_node = {}
 
+    _trace: Optional[Trace] = None
+    if is_enabled():
+        _trace = Trace(
+            name=f"turn_{current_node_name}",
+            run_type="chain",
+            inputs={
+                "session_id": session_id or "",
+                "node": current_node_name,
+                "turn_number": turn_number,
+                "message": message[:500] if message else "",
+            },
+        )
+
     node = NODE_REGISTRY.get(current_node_name)
     if node is None:
-        return _apply_guardrails(
+        result = _apply_guardrails(
             RunResult(
                 next_node=None,
                 assistant_message="I'm sorry, something went wrong.",
@@ -533,20 +603,36 @@ def run_turn(
                 call_complete=True,
             )
         )
+        if _trace:
+            _trace.finish(outputs=_finish_outputs(result))
+        return result
 
     turn_id = str(uuid.uuid4())
 
     # Handle special nodes: CONFIRMATION, SUMMARY, HANDOFF
     if current_node_name == IntakeState.CONFIRMATION.value:
         result_fields, action, success = _extract_for_confirmation(message, fields, turn_id)
+        fields_dump = result_fields.model_dump()
         if not success:
             retry_count_by_node[current_node_name] = (
                 retry_count_by_node.get(current_node_name, 0) + 1
             )
             if retry_count_by_node[current_node_name] >= MAX_RETRIES_PER_NODE:
                 tracker.stop("run_turn")
-                return _apply_guardrails(_route_to_handoff(result_fields, retry_count_by_node))
-            return _apply_guardrails(
+                result = _apply_guardrails(_route_to_handoff(result_fields, retry_count_by_node))
+                if _trace:
+                    ext = {"fields": fields_dump, "success": False}
+                    gr = {"triggered": "unknown", "original": result.assistant_message}
+                    _add_children_for_result(
+                        _trace,
+                        message,
+                        extraction=ext,
+                        guardrail=gr,
+                        escalation=None,
+                    )
+                    _trace.finish(outputs=_finish_outputs(result))
+                return result
+            result = _apply_guardrails(
                 RunResult(
                     next_node=IntakeState.CONFIRMATION.value,
                     assistant_message="I'm sorry, I didn't understand. "
@@ -556,10 +642,34 @@ def run_turn(
                     retry_count_by_node=retry_count_by_node,
                 )
             )
+            if _trace:
+                ext = {"fields": fields_dump, "success": False}
+                gr = {"triggered": "unknown", "original": result.assistant_message}
+                _add_children_for_result(
+                    _trace,
+                    message,
+                    extraction=ext,
+                    guardrail=gr,
+                    escalation=None,
+                )
+                _trace.finish(outputs=_finish_outputs(result))
+            return result
         retry_count_by_node[current_node_name] = 0
         if action == "summary":
-            return _apply_guardrails(_route_to_summary(result_fields, retry_count_by_node))
-        return _apply_guardrails(
+            result = _apply_guardrails(_route_to_summary(result_fields, retry_count_by_node))
+            if _trace:
+                ext = {"fields": fields_dump, "success": True}
+                gr = {"triggered": "unknown", "original": result.assistant_message}
+                _add_children_for_result(
+                    _trace,
+                    message,
+                    extraction=ext,
+                    guardrail=gr,
+                    escalation=None,
+                )
+                _trace.finish(outputs=_finish_outputs(result))
+            return result
+        result = _apply_guardrails(
             RunResult(
                 next_node=IntakeState.CONFIRMATION.value,
                 assistant_message="Thank you, I've updated that. "
@@ -569,11 +679,23 @@ def run_turn(
                 retry_count_by_node=retry_count_by_node,
             )
         )
+        if _trace:
+            ext = {"fields": fields_dump, "success": True}
+            gr = {"triggered": "unknown", "original": result.assistant_message}
+            _add_children_for_result(
+                _trace,
+                message,
+                extraction=ext,
+                guardrail=gr,
+                escalation=None,
+            )
+            _trace.finish(outputs=_finish_outputs(result))
+        return result
 
     if current_node_name == IntakeState.SUMMARY.value:
         fhir = _build_fhir_json(fields)
         tracker.stop("run_turn")
-        return _apply_guardrails(
+        result = _apply_guardrails(
             RunResult(
                 next_node=IntakeState.COMPLETE.value,
                 assistant_message=(
@@ -587,10 +709,13 @@ def run_turn(
                 retry_count_by_node=retry_count_by_node,
             )
         )
+        if _trace:
+            _trace.finish(outputs=_finish_outputs_with_summary(result))
+        return result
 
     if current_node_name == IntakeState.HANDOFF.value:
         tracker.stop("run_turn")
-        return _apply_guardrails(
+        result = _apply_guardrails(
             RunResult(
                 next_node=IntakeState.COMPLETE.value,
                 assistant_message=PROMPTS["handoff"],
@@ -600,19 +725,41 @@ def run_turn(
                 retry_count_by_node=retry_count_by_node,
             )
         )
+        if _trace:
+            _trace.finish(outputs=_finish_outputs_with_summary(result))
+        return result
+
+    extraction_result = None
+    escalation_result = None
 
     # Standard extraction nodes — always attempt extraction even on empty
     # messages so that retry logic works correctly.
     extractor = _EXTRACTORS.get(current_node_name)
     if extractor:
         new_fields, success = extractor(message, fields, turn_id)
+        extraction_result = {
+            "fields": new_fields.model_dump(),
+            "success": success,
+            "node": current_node_name,
+        }
         if not success:
             retry_count_by_node[current_node_name] = (
                 retry_count_by_node.get(current_node_name, 0) + 1
             )
             if retry_count_by_node[current_node_name] >= MAX_RETRIES_PER_NODE:
                 tracker.stop("run_turn")
-                return _apply_guardrails(_route_to_handoff(new_fields, retry_count_by_node))
+                result = _apply_guardrails(_route_to_handoff(new_fields, retry_count_by_node))
+                if _trace:
+                    gr = {"triggered": "unknown", "original": result.assistant_message}
+                    _add_children_for_result(
+                        _trace,
+                        message,
+                        extraction=extraction_result,
+                        guardrail=gr,
+                        escalation=None,
+                    )
+                    _trace.finish(outputs=_finish_outputs(result))
+                return result
             # Check escalation even on retry — a CRITICAL flag overrides retry
             result = RunResult(
                 next_node=current_node_name,
@@ -622,8 +769,25 @@ def run_turn(
                 retry_count_by_node=retry_count_by_node,
             )
             result = _check_and_apply_escalation(result, message)
+            escalation_result = {
+                "triggered": result.handoff_triggered,
+                "severity": result.red_flag_severity,
+                "flag_id": result.red_flag_id,
+                "reason": result.handoff_reason,
+            }
             tracker.stop("run_turn")
-            return _apply_guardrails(result)
+            result = _apply_guardrails(result)
+            if _trace:
+                gr = {"triggered": "unknown", "original": result.assistant_message}
+                _add_children_for_result(
+                    _trace,
+                    message,
+                    extraction=extraction_result,
+                    guardrail=gr,
+                    escalation=escalation_result,
+                )
+                _trace.finish(outputs=_finish_outputs(result))
+            return result
         retry_count_by_node[current_node_name] = 0
         fields = new_fields
 
@@ -645,7 +809,24 @@ def run_turn(
         retry_count_by_node=retry_count_by_node,
     )
     result = _check_and_apply_escalation(result, message)
-    return _apply_guardrails(result)
+    escalation_result = {
+        "triggered": result.handoff_triggered,
+        "severity": result.red_flag_severity,
+        "flag_id": result.red_flag_id,
+        "reason": result.handoff_reason,
+    }
+    result = _apply_guardrails(result)
+    if _trace:
+        gr = {"triggered": "unknown", "original": result.assistant_message}
+        _add_children_for_result(
+            _trace,
+            message,
+            extraction=extraction_result,
+            guardrail=gr,
+            escalation=escalation_result,
+        )
+        _trace.finish(outputs=_finish_outputs(result))
+    return result
 
 
 def _check_and_apply_escalation(result: RunResult, message: str) -> RunResult:

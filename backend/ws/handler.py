@@ -36,6 +36,7 @@ from backend.fsm.runner import run_turn
 from backend.rag.enrich import enrich_summary_with_rag
 from backend.session.manager import session_manager
 from backend.session.models import IntakeState
+from backend.tracing.langsmith import Trace
 from backend.tracking.latency import TurnTiming
 from backend.voice.deepgram_client import DeepgramStreamClient
 from backend.voice.tts_client import synthesize
@@ -228,6 +229,8 @@ async def _handle_text(
         message=message,
         fields=session.extracted_fields,
         retry_count_by_node=session.retry_count_by_node,
+        session_id=session.session_id,
+        turn_number=session.turn_count,
     )
 
     if timing:
@@ -280,6 +283,12 @@ async def _handle_text(
         await enrich_summary_with_rag(result.final_summary, result.fields)
         summary_dict = _summary_dict(result.final_summary)
         await _send_json(websocket, {"type": "summary", "summary": summary_dict})
+        trace = Trace(
+            "summary_complete",
+            "chain",
+            inputs={"session_id": session.session_id, "node": new_node.value},
+        )
+        trace.finish(outputs={"summary": summary_dict, "turn_count": session.turn_count})
 
 
 async def _send_latency(
@@ -292,6 +301,12 @@ async def _send_latency(
     await _send_json(websocket, {"type": "latency", **client_data})
     session.latency_logs.append({"turn_number": timing.turn_counter, **client_data["metrics"]})
     await session_manager.update_session(session)
+    trace = Trace(
+        "latency_event",
+        "tool",
+        inputs={"session_id": session.session_id, "turn_id": timing.turn_id},
+    )
+    trace.finish(outputs={"metrics": client_data["metrics"]})
     timing.reset_utterance()
 
 
