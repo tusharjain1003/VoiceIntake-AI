@@ -108,3 +108,14 @@
 - Core FSM correctness is independent of speech modality.
 - Deterministic patient responses (templates per node) make results reproducible.
 - Per-turn timing metrics capture the LLM + FSM portion of latency, which is the dominant variable.
+
+## 12. Fail Visible on Session Store Outage
+
+**Decision:** When Redis is unavailable, the session manager raises `SessionStoreUnavailableError` rather than silently creating blank sessions.
+
+**Rationale:**
+- Previously, `_save()` silently skipped writes and `_load()` returned `None` when Redis was down. A follow-up request would create a fresh blank session, silently corrupting the intake flow.
+- The REST endpoint returns HTTP 503 with a descriptive message.
+- The WebSocket handler sends a JSON error event and closes with code 1011.
+- For local development without Docker, `DEV_MODE=true` switches to an in-memory store (`MemorySessionManager`) that does not persist across restarts but allows the app to start without Redis.
+- In production (`dev_mode=false`), the app will not start at all if Redis is unavailable, preventing silent data loss.

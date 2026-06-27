@@ -91,6 +91,7 @@ The eval harness at `backend/evals/` uses a deterministic patient simulator:
 - **TypeScript**: strict mode, explicit return types, interfaces over types where possible.
 - **FSM**: Every state lives in `NODE_REGISTRY` as a `StateNode` with `prompt`, `extract`, `transitions`, `guardrails`. Do not add ad-hoc graph logic.
 - **Field metadata**: Every extracted value uses `FieldValue(value, confidence, source_turn_id, confirmed)`.
+- **Session store**: All session read/write operations go through `session_manager` (imported from `backend.session.manager`). When Redis is unavailable, the manager raises `SessionStoreUnavailableError` — the caller must handle it (HTTP 503 / WS error event). Never silently swallow session store failures.
 - **Testing**: `pytest` for backend, `vitest` for frontend. Unit test every FSM state transition.
 
 ## Infrastructure

@@ -28,13 +28,14 @@ import logging
 import time
 from typing import Any, Optional
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
 from backend.config import settings
 from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.runner import run_turn
 from backend.rag.enrich import enrich_summary_with_rag
-from backend.session.manager import session_manager
+from backend.session.exceptions import SessionStoreUnavailableError
+from backend.session.manager import SessionStore
 from backend.session.models import IntakeState
 from backend.tracing.langsmith import Trace
 from backend.tracking.latency import TurnTiming
@@ -46,23 +47,43 @@ logger = logging.getLogger(__name__)
 _AUDIO_DEBUG_INTERVAL = 5
 
 
-async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
+async def handle_intake_ws(
+    websocket: WebSocket,
+    session_id: str,
+    session_store: SessionStore,
+) -> None:
     await websocket.accept()
 
-    if session_id == "new":
-        session_id = await session_manager.create_session()
-        await _send_json(websocket, {"type": "session_id", "id": session_id})
-    else:
-        session = await session_manager.get_session(session_id)
-        if session is None:
-            await _send_json(
-                websocket,
-                {"type": "error", "message": f"Session {session_id} not found."},
-            )
-            await websocket.close()
-            return
+    try:
+        if session_id == "new":
+            session_id = await session_store.create_session()
+            await _send_json(websocket, {"type": "session_id", "id": session_id})
+        else:
+            session = None
+            try:
+                session = await session_store.get_session(session_id)
+            except SessionStoreUnavailableError as exc:
+                await _send_json(websocket, {"type": "error", "message": str(exc)})
+                await websocket.close(code=1011)
+                return
+            if session is None:
+                await _send_json(
+                    websocket,
+                    {"type": "error", "message": f"Session {session_id} not found."},
+                )
+                await websocket.close()
+                return
 
-    session = await session_manager.get_or_create_session(session_id)
+        try:
+            session = await session_store.get_or_create_session(session_id)
+        except SessionStoreUnavailableError as exc:
+            await _send_json(websocket, {"type": "error", "message": str(exc)})
+            await websocket.close(code=1011)
+            return
+    except SessionStoreUnavailableError as exc:
+        await _send_json(websocket, {"type": "error", "message": str(exc)})
+        await websocket.close(code=1011)
+        return
 
     dg: Optional[DeepgramStreamClient] = None
     _dg_started = False
@@ -82,7 +103,7 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
             now = time.monotonic()
 
             if dg_task and dg_task in done:
-                await _handle_dg_event(websocket, session, dg_task.result(), timing)
+                await _handle_dg_event(websocket, session, dg_task.result(), session_store, timing)
 
             if ws_task in done:
                 event = ws_task.result()
@@ -121,9 +142,10 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
                     msg_type = raw.get("type")
 
                     if msg_type == "start":
-                        await _handle_start(websocket, session)
+                        await _handle_start(websocket, session, session_store)
                     elif msg_type == "text":
-                        await _handle_text(websocket, session, raw.get("message", ""))
+                        text = raw.get("message", "")
+                        await _handle_text(websocket, session, text, session_store)
                     elif msg_type == "stop":
                         break
                     else:
@@ -135,6 +157,8 @@ async def handle_intake_ws(websocket: WebSocket, session_id: str) -> None:
             for task in pending:
                 task.cancel()
 
+    except WebSocketDisconnect:
+        pass
     except Exception:
         pass
     finally:
@@ -155,6 +179,7 @@ async def _handle_dg_event(
     websocket: WebSocket,
     session: Any,
     event: tuple,
+    session_store: SessionStore,
     timing: Optional[TurnTiming] = None,
 ) -> None:
     event_type = event[0]
@@ -167,7 +192,7 @@ async def _handle_dg_event(
             if timing:
                 timing.stt_final_time = time.monotonic()
                 timing.start_turn()
-            await _handle_text(websocket, session, text, timing)
+            await _handle_text(websocket, session, text, session_store, timing)
         else:
             await _send_json(websocket, {"type": "transcript", "text": text, "is_final": False})
 
@@ -180,13 +205,17 @@ async def _handle_dg_event(
 # ---------------------------------------------------------------------------
 
 
-async def _handle_start(websocket: WebSocket, session: Any) -> None:
+async def _handle_start(
+    websocket: WebSocket,
+    session: Any,
+    session_store: SessionStore,
+) -> None:
     """Send the initial greeting prompt for a fresh session."""
     node = NODE_REGISTRY.get(session.current_node.value)
     prompt = node.prompt_template if node else ""
 
     await _send_json(websocket, {"type": "agent_text", "text": prompt})
-    await _send_tts(websocket, prompt, session)
+    await _send_tts(websocket, prompt, session, session_store)
     await _send_json(
         websocket,
         {
@@ -205,6 +234,7 @@ async def _handle_text(
     websocket: WebSocket,
     session: Any,
     message: str,
+    session_store: SessionStore,
     timing: Optional[TurnTiming] = None,
 ) -> None:
     if session.call_complete:
@@ -216,7 +246,7 @@ async def _handle_text(
     message = message or ""
 
     if not message.strip() and session.turn_count == 0:
-        await _handle_start(websocket, session)
+        await _handle_start(websocket, session, session_store)
         return
 
     session.turn_count += 1
@@ -247,13 +277,18 @@ async def _handle_text(
     session.red_flag_severity = result.red_flag_severity
     session.red_flag_id = result.red_flag_id
     session.handoff_reason = result.handoff_reason
-    await session_manager.update_session(session)
+    try:
+        await session_store.update_session(session)
+    except SessionStoreUnavailableError as exc:
+        await _send_json(websocket, {"type": "error", "message": str(exc)})
+        await websocket.close(code=1011)
+        return
 
     await _send_json(websocket, {"type": "agent_text", "text": result.assistant_message})
 
     if timing:
         timing.tts_start = time.monotonic()
-    await _send_tts(websocket, result.assistant_message, session, timing)
+    await _send_tts(websocket, result.assistant_message, session, session_store, timing)
 
     await _send_json(
         websocket,
@@ -295,12 +330,16 @@ async def _send_latency(
     websocket: WebSocket,
     session: Any,
     timing: TurnTiming,
+    session_store: SessionStore,
 ) -> None:
     """Record the completed turn and send a latency event to the frontend."""
     client_data = timing.to_client_dict()
     await _send_json(websocket, {"type": "latency", **client_data})
     session.latency_logs.append({"turn_number": timing.turn_counter, **client_data["metrics"]})
-    await session_manager.update_session(session)
+    try:
+        await session_store.update_session(session)
+    except SessionStoreUnavailableError:
+        pass
     trace = Trace(
         "latency_event",
         "tool",
@@ -314,6 +353,7 @@ async def _send_tts(
     websocket: WebSocket,
     text: str,
     session: Any,
+    session_store: SessionStore,
     timing: Optional[TurnTiming] = None,
 ) -> None:
     """Synthesise TTS and send audio frames (best-effort; failures are logged)."""
@@ -341,7 +381,7 @@ async def _send_tts(
 
     if timing:
         timing.tts_end = time.monotonic()
-        await _send_latency(websocket, session, timing)
+        await _send_latency(websocket, session, timing, session_store)
 
 
 async def _send_json(websocket: WebSocket, data: dict[str, Any]) -> None:

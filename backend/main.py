@@ -1,13 +1,14 @@
 import logging
 
-from fastapi import FastAPI, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.config import settings
 from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.runner import run_turn
 from backend.rag.enrich import enrich_summary_with_rag
-from backend.session.manager import session_manager
+from backend.session import manager as session_mgr
+from backend.session.exceptions import SessionStoreUnavailableError
 from backend.session.models import IntakeState, TextIntakeResponse
 from backend.tracing.langsmith import Trace
 
@@ -45,6 +46,12 @@ async def startup() -> None:
     except Exception as exc:
         logger.warning("Redis unavailable — session persistence disabled: %s", exc)
 
+    try:
+        await session_mgr.init_session_manager()
+    except SessionStoreUnavailableError as exc:
+        logger.critical("Session store unavailable: %s", exc)
+        raise
+
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
@@ -62,9 +69,15 @@ async def health() -> dict[str, str]:
 
 @app.post("/text/intake/{session_id}")
 async def text_intake(session_id: str, body: dict) -> dict:
-    if session_id == "new":
-        session_id = await session_manager.create_session()
-    session = await session_manager.get_or_create_session(session_id)
+    if session_mgr.session_manager is None:
+        raise HTTPException(status_code=503, detail="Session store not initialized.")
+
+    try:
+        if session_id == "new":
+            session_id = await session_mgr.session_manager.create_session()
+        session = await session_mgr.session_manager.get_or_create_session(session_id)
+    except SessionStoreUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     if session.call_complete:
         return TextIntakeResponse(
@@ -108,7 +121,10 @@ async def text_intake(session_id: str, body: dict) -> dict:
     session.red_flag_severity = result.red_flag_severity
     session.red_flag_id = result.red_flag_id
     session.handoff_reason = result.handoff_reason
-    await session_manager.update_session(session)
+    try:
+        await session_mgr.session_manager.update_session(session)
+    except SessionStoreUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
     if result.call_complete and result.final_summary:
         await enrich_summary_with_rag(result.final_summary, result.fields)
@@ -140,6 +156,12 @@ async def text_intake(session_id: str, body: dict) -> dict:
 
 @app.websocket("/ws/intake/{session_id}")
 async def ws_intake(websocket: WebSocket, session_id: str) -> None:
+    if session_mgr.session_manager is None:
+        await websocket.accept()
+        await websocket.send_json({"type": "error", "message": "Session store not initialized."})
+        await websocket.close(code=1011)
+        return
+
     from backend.ws.handler import handle_intake_ws
 
-    await handle_intake_ws(websocket, session_id)
+    await handle_intake_ws(websocket, session_id, session_mgr.session_manager)

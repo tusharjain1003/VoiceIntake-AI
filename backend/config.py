@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     log_level: str = "info"
     langsmith_api_key: str = ""
     langsmith_project: str = ""
+    dev_mode: bool = False
 
 
 settings = Settings()

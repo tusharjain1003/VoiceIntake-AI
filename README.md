@@ -74,6 +74,7 @@ cp .env.example .env
 | `REDIS_URL` | Yes | Redis DSN (default: `redis://localhost:6379`) |
 | `LANGCHAIN_API_KEY` | Tracing | LangSmith tracing |
 | `LANGCHAIN_PROJECT` | No | LangSmith project name (default: `voiceintake-ai`) |
+| `DEV_MODE` | No | Set `true` to use in-memory session store when Redis is unavailable (for local dev without Docker) |
 
 ### 3. Start infrastructure
 
