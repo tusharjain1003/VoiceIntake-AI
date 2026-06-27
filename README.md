@@ -38,6 +38,17 @@ Browser (React + TS)
 
 The core FSM logic, guardrails, and field extraction are **modality-agnostic** — the same engine powers both modes.
 
+### Persistence (Dual-Store)
+
+| Store | Purpose | Behaviour When Unavailable |
+|-------|---------|---------------------------|
+| **Redis** | Live session state (fast reads/writes, TTL-based expiry). | `DEV_MODE=true` falls back to in-memory; production refuses to start. |
+| **Postgres** | Durable audit log — session snapshots, transcripts, safety/escalation events, latency metrics, and final summaries written on **every turn**. | Logged warning; app continues with Redis only. Summary persistence logs errors visibly. |
+
+Postgres writes are best-effort for turn-by-turn data — they never block the user flow. The final summary write logs failure prominently since losing the summary is a data-loss event.
+
+Check availability at `/health`:
+
 ## Local Setup
 
 ### Prerequisites
@@ -155,6 +166,18 @@ Output:
 Flags:
 - `--runs N` — runs per scenario (default: 50)
 - `--output-dir PATH` — output directory (default: `backend/evals/`)
+
+## How to Run Smoke Tests
+
+Smoke tests verify infrastructure components work end-to-end:
+
+```bash
+# Verify Postgres persistence (requires Postgres running)
+PYTHONPATH=. uv run python -m backend.tests.smoke_persistence
+
+# Verify Redis outage behaviour  (requires Redis NOT running)
+PYTHONPATH=. uv run python -m backend.tests.smoke_session_store
+```
 
 ## Screenshots
 

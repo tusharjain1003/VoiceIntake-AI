@@ -31,6 +31,7 @@ from typing import Any, Optional
 from fastapi import WebSocket, WebSocketDisconnect
 
 from backend.config import settings
+from backend.db import repository as repo
 from backend.fsm.nodes import NODE_REGISTRY
 from backend.fsm.runner import run_turn
 from backend.rag.enrich import enrich_summary_with_rag
@@ -314,7 +315,33 @@ async def _handle_text(
             },
         )
 
+    # ------------------------------------------------------------------
+    # Postgres audit persistence (best-effort, non-blocking)
+    # ------------------------------------------------------------------
+    await repo.save_session(session)
+    await repo.save_transcript(session.session_id, session.turn_count, "user", message)
+    await repo.save_transcript(
+        session.session_id, session.turn_count, "assistant", result.assistant_message
+    )
+    if result.guardrail_triggered:
+        await repo.save_safety_event(
+            session.session_id,
+            session.turn_count,
+            category=result.guardrail_category or "",
+            original_text=result.guardrail_original or "",
+            replacement_text=result.assistant_message,
+        )
+    if result.handoff_triggered and result.red_flag_id:
+        await repo.save_escalation_event(
+            session.session_id,
+            session.turn_count,
+            rule_id=result.red_flag_id,
+            severity=result.red_flag_severity or "HIGH",
+            immediate_handoff=result.red_flag_severity == "CRITICAL",
+        )
+
     if result.call_complete and result.final_summary:
+        await repo.save_summary(session.session_id, result.final_summary.model_dump())
         await enrich_summary_with_rag(result.final_summary, result.fields)
         summary_dict = _summary_dict(result.final_summary)
         await _send_json(websocket, {"type": "summary", "summary": summary_dict})
@@ -340,6 +367,7 @@ async def _send_latency(
         await session_store.update_session(session)
     except SessionStoreUnavailableError:
         pass
+    await repo.save_latency_event(session.session_id, timing.turn_counter, client_data["metrics"])
     trace = Trace(
         "latency_event",
         "tool",

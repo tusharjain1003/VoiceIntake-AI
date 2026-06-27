@@ -46,12 +46,15 @@
 
 ## 5. Postgres + Redis
 
-**Decision:** Redis for hot session state (fast reads/writes per turn); Postgres for durable storage (completed sessions, transcripts, summaries).
+**Decision:** Redis for hot session state (fast reads/writes per turn); Postgres for durable audit (session snapshots, transcripts, safety/escalation events, latency metrics, and summaries written on **every turn**).
 
 **Rationale:**
 - Redis TTL auto-cleans abandoned sessions.
 - Postgres is the source of truth for audit and later RAG ingestion.
 - Separation avoids schema migration churn on Redis.
+- The `backend/db/repository.py` module encapsulates all Postgres writes. Each method is best-effort — failures log a warning but never block the user flow. Summary writes log errors at `ERROR` level to make data-loss events visible.
+
+**Status:** Implemented. Both REST (`/text/intake/{session_id}`) and WebSocket (`/ws/intake/{session_id}`) paths persist on every `run_turn`. The `/health` endpoint reports `db_available` and `redis_available` flags.
 
 ## 6. Full-Audio TTS First, Streaming Later
 

@@ -38,14 +38,21 @@ class RunResult:
     red_flag_severity: Optional[str] = None
     red_flag_id: Optional[str] = None
     handoff_reason: Optional[str] = None
+    guardrail_triggered: bool = False
+    guardrail_category: Optional[str] = None
+    guardrail_original: Optional[str] = None
 
 
 def _apply_guardrails(result: RunResult) -> RunResult:
     """Replace *assistant_message* with a safe neutral response if the
-    guardrail classifier flags it."""
+    guardrail classifier flags it. Populates guardrail_* fields on *result*
+    for downstream persistence."""
     if result.assistant_message:
         gr = check_response_safety(result.assistant_message)
         if not gr.safe and gr.replacement is not None:
+            result.guardrail_triggered = True
+            result.guardrail_category = gr.category
+            result.guardrail_original = result.assistant_message
             result.assistant_message = gr.replacement
     return result
 

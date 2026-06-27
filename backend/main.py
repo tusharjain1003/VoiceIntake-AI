@@ -28,7 +28,8 @@ app.add_middleware(
 
 @app.on_event("startup")
 async def startup() -> None:
-    from backend.database import create_engine, init_redis
+    from backend.database import AsyncSessionLocal, create_engine, init_redis
+    from backend.db import repository as repo
     from backend.db.migrate import run_migrations
 
     try:
@@ -38,6 +39,9 @@ async def startup() -> None:
         if async_engine is not None:
             await run_migrations(async_engine)
             logger.info("Database migrations applied")
+        if AsyncSessionLocal is not None:
+            repo.init_repository(AsyncSessionLocal)
+            logger.info("Postgres repository initialised")
     except Exception as exc:
         logger.warning("Postgres unavailable — DB persistence disabled: %s", exc)
 
@@ -63,8 +67,24 @@ async def shutdown() -> None:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health() -> dict[str, str | bool]:
+    from backend.database import async_engine
+    from backend.database import redis_client as db_redis
+    from backend.db import repository as repo
+
+    db_avail = async_engine is not None and repo.is_available()
+    redis_avail = db_redis is not None
+    if db_avail and redis_avail:
+        status = "ok"
+    elif db_avail or redis_avail:
+        status = "degraded"
+    else:
+        status = "unavailable"
+    return {
+        "status": status,
+        "db_available": db_avail,
+        "redis_available": redis_avail,
+    }
 
 
 @app.post("/text/intake/{session_id}")
@@ -126,7 +146,35 @@ async def text_intake(session_id: str, body: dict) -> dict:
     except SessionStoreUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
 
+    # ------------------------------------------------------------------
+    # Postgres audit persistence (best-effort, non-blocking)
+    # ------------------------------------------------------------------
+    from backend.db import repository as repo
+
+    await repo.save_session(session)
+    await repo.save_transcript(session.session_id, session.turn_count, "user", message)
+    await repo.save_transcript(
+        session.session_id, session.turn_count, "assistant", result.assistant_message
+    )
+    if result.guardrail_triggered:
+        await repo.save_safety_event(
+            session.session_id,
+            session.turn_count,
+            category=result.guardrail_category or "",
+            original_text=result.guardrail_original or "",
+            replacement_text=result.assistant_message,
+        )
+    if result.handoff_triggered and result.red_flag_id:
+        await repo.save_escalation_event(
+            session.session_id,
+            session.turn_count,
+            rule_id=result.red_flag_id,
+            severity=result.red_flag_severity or "HIGH",
+            immediate_handoff=result.red_flag_severity == "CRITICAL",
+        )
+
     if result.call_complete and result.final_summary:
+        await repo.save_summary(session.session_id, result.final_summary.model_dump())
         await enrich_summary_with_rag(result.final_summary, result.fields)
         trace = Trace(
             "summary_complete",
