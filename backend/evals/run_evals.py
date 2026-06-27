@@ -18,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from backend.evals.metrics import EvalRunResult, EvalSummary, TurnRecord, compute_metrics
 from backend.evals.patient_simulator import get_response
-from backend.evals.scenarios import SCENARIOS
+from backend.evals.scenarios import SCENARIOS, validate_scenarios
 from backend.fsm.runner import run_turn
 from backend.session.models import ExtractedFields, IntakeState
 
@@ -301,6 +301,8 @@ def main() -> None:
     os.makedirs(output_dir, exist_ok=True)
 
     results: list[EvalRunResult] = []
+
+    validate_scenarios(SCENARIOS)
 
     for scenario in SCENARIOS:
         for run_idx in range(args.runs):

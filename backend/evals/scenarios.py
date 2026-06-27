@@ -15,6 +15,44 @@ class Scenario:
     tags: list[str] = field(default_factory=list)
 
 
+def validate_scenarios(scenarios: list[Scenario]) -> None:
+    errors: list[str] = []
+
+    for i, s in enumerate(scenarios):
+        if not s.name:
+            errors.append(f"Scenario at index {i} has no name")
+        if not s.patient_responses:
+            errors.append(f"Scenario '{s.name}' has no patient_responses")
+        if not s.expected_fields:
+            errors.append(f"Scenario '{s.name}' has no expected_fields")
+
+        if "patient_name" in s.expected_fields:
+            expected_name = s.expected_fields["patient_name"].lower()
+            greeting = s.patient_responses.get("greeting", "").lower()
+            confirmation = s.patient_responses.get("confirmation", "").lower()
+            if expected_name not in greeting and expected_name not in confirmation:
+                errors.append(
+                    f"Scenario '{s.name}': expected patient_name "
+                    f"'{s.expected_fields['patient_name']}' not found"
+                    " in greeting or confirmation response"
+                )
+
+        if "date_of_birth" in s.expected_fields:
+            expected_dob = s.expected_fields["date_of_birth"].lower()
+            greeting = s.patient_responses.get("greeting", "").lower()
+            identity = s.patient_responses.get("identity", "").lower()
+            if expected_dob not in greeting and expected_dob not in identity:
+                errors.append(
+                    f"Scenario '{s.name}': expected date_of_birth "
+                    f"'{s.expected_fields['date_of_birth']}' not found"
+                    " in greeting or identity response"
+                )
+
+    if errors:
+        msg = "Scenario validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
+        raise ValueError(msg)
+
+
 SCENARIOS: list[Scenario] = [
     Scenario(
         name="standard_annual_checkup",
@@ -210,7 +248,7 @@ SCENARIOS: list[Scenario] = [
             "confirmation": "yes",
         },
         expected_fields={
-            "patient_name": "Emily Chen",
+            "patient_name": "Priya Sharma",
             "date_of_birth": "02/28/1965",
             "medical_history": "Type 2 diabetes, hypertension, high cholesterol.",
             "medications": "Metformin 500mg, Lisinopril 20mg, Atorvastatin 40mg, aspirin.",
