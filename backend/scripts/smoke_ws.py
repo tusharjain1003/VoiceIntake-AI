@@ -4,9 +4,30 @@ Smoke test for the WebSocket intake endpoint.
 Connects a WebSocket client and runs a simple happy-path scenario.
 """
 
+from typing import Any
+
 from fastapi.testclient import TestClient
 
 from backend.main import app
+
+
+def _skip_tts(ws: Any) -> None:
+    """If TTS is enabled, skip over tts_start/binary/tts_end."""
+    from backend.config import settings
+
+    if not settings.elevenlabs_api_key or not settings.elevenlabs_voice_id:
+        return
+    # Receive tts_start
+    m = ws.receive_json()
+    assert m["type"] == "tts_start"
+    # Receive binary audio (might be present since TTS succeeded)
+    try:
+        ws.receive_bytes()
+    except Exception:
+        pass
+    # Receive tts_end
+    m = ws.receive_json()
+    assert m["type"] == "tts_end"
 
 
 def test_ws_handshake() -> None:
@@ -27,6 +48,7 @@ def test_ws_handshake() -> None:
         assert greeting["type"] == "agent_text", f"Expected agent_text, got {greeting['type']}"
         assert greeting["text"] != ""
         print("  ✓ greeting received")
+        _skip_tts(ws)
 
         # Read the two extra messages that follow start
         state = ws.receive_json()
@@ -42,6 +64,7 @@ def test_ws_handshake() -> None:
         msg1 = ws.receive_json()
         assert msg1["type"] == "agent_text"
         print(f"  ✓ agent_text: {msg1['text'][:60]}...")
+        _skip_tts(ws)
 
         # Expect fields_update
         msg2 = ws.receive_json()
@@ -87,6 +110,7 @@ def test_ws_binary_audio() -> None:
         ws.send_json({"type": "text", "message": "John Smith"})
         msg = ws.receive_json()
         assert msg["type"] == "agent_text"
+        _skip_tts(ws)
         msg = ws.receive_json()
         assert msg["type"] == "fields_update" or msg["type"] == "state_update"
         print("  ✓ binary audio frames accepted, text flow intact")

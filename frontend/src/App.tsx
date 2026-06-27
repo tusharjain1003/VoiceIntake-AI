@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from "react";
 import { sendMessage } from "./api";
 import FieldsPanel from "./components/FieldsPanel";
 import HandoffBanner from "./components/HandoffBanner";
+import LatencyBar from "./components/LatencyBar";
 import SessionHeader from "./components/SessionHeader";
 import SummaryView from "./components/SummaryView";
 import TranscriptPanel from "./components/TranscriptPanel";
@@ -11,6 +12,7 @@ import useMicrophone from "./useMicrophone";
 import type {
   ExtractedFields,
   IntakeState,
+  LatencyEntry,
   Message,
   OrbState,
   PreVisitSummary,
@@ -44,6 +46,7 @@ export default function App() {
   const [handoffReason, setHandoffReason] = useState<string | null>(null);
   const [mode, setMode] = useState<Mode>("ws");
   const [orbState, setOrbState] = useState<OrbState>("idle");
+  const [latencyLogs, setLatencyLogs] = useState<LatencyEntry[]>([]);
   const sessionIdRef = useRef(sessionId);
   sessionIdRef.current = sessionId;
 
@@ -140,6 +143,14 @@ export default function App() {
       }
 
       if (msg.type === "audio_debug") {
+        return;
+      }
+
+      if (msg.type === "latency") {
+        setLatencyLogs((prev) => [
+          ...prev,
+          { turn_number: prev.length + 1, ...msg.metrics },
+        ]);
         return;
       }
 
@@ -354,6 +365,8 @@ export default function App() {
           <button className="btn-mode-toggle" onClick={toggleMode}>
             Switch to {mode === "ws" ? "REST" : "WebSocket"}
           </button>
+
+          <LatencyBar logs={latencyLogs} />
         </aside>
       </main>
     </div>

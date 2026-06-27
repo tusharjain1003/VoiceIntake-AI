@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -78,3 +78,4 @@ class SessionData(BaseModel):
     red_flag_severity: Optional[str] = None
     red_flag_id: Optional[str] = None
     handoff_reason: Optional[str] = None
+    latency_logs: list[dict[str, Any]] = Field(default_factory=list)

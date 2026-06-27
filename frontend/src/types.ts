@@ -87,7 +87,29 @@ export type WSServerMessage =
   | { type: "audio_debug"; bytes_received: number }
   | { type: "transcript"; text: string; is_final: boolean }
   | { type: "tts_start"; content_type: string }
-  | { type: "tts_end" };
+  | { type: "tts_end" }
+  | {
+      type: "latency";
+      turn_id: string;
+      metrics: LatencyMetrics;
+    };
+
+export interface LatencyMetrics {
+  stt_final_ms: number | null;
+  fsm_ms: number | null;
+  tts_ms: number | null;
+  total_response_ms: number | null;
+  timestamp: number;
+}
+
+export interface LatencyEntry {
+  turn_number: number;
+  stt_final_ms: number | null;
+  fsm_ms: number | null;
+  tts_ms: number | null;
+  total_response_ms: number | null;
+  timestamp: number;
+}
 
 export type OrbState = "idle" | "listening" | "processing" | "speaking" | "handoff";
 
