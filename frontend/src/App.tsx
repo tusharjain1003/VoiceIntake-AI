@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { sendMessage } from "./api";
 import FieldsPanel from "./components/FieldsPanel";
 import HandoffBanner from "./components/HandoffBanner";
@@ -174,7 +174,14 @@ export default function App() {
       onTtsPlaying: handleTtsPlaying,
     });
 
-  const mic = useMicrophone({ ws: wsRef.current, enabled: orbState === "listening" });
+  const mic = useMicrophone({ ws: wsRef.current });
+
+  // Reset orb state when mic fails (permission denied, no device, etc.)
+  useEffect(() => {
+    if (mic.status === "error" || mic.status === "unsupported") {
+      setOrbState("idle");
+    }
+  }, [mic.status]);
 
   const resetState = useCallback(() => {
     setSessionId("new");
@@ -346,6 +353,12 @@ export default function App() {
               <span className="status-value">{mic.status}</span>
             </div>
           </div>
+
+          {mic.error && (
+            <div className="mic-error-banner">
+              {mic.error.message}
+            </div>
+          )}
 
           <VoiceOrb
             state={handoffTriggered ? "handoff" : orbState}

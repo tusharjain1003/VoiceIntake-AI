@@ -12,16 +12,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 interface UseMicrophoneOptions {
   ws: WebSocket | null;
-  enabled: boolean;
 }
 
 export type MicStatus = "idle" | "requesting" | "active" | "error" | "unsupported";
+export type MicError = { message: string } | null;
 
 const CHUNK_MS = 250;
 const PREFERRED_MIME = "audio/webm;codecs=opus";
 
-export default function useMicrophone({ ws, enabled }: UseMicrophoneOptions) {
+export default function useMicrophone({ ws }: UseMicrophoneOptions) {
   const [status, setStatus] = useState<MicStatus>("idle");
+  const [error, setError] = useState<MicError>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const bytesSentRef = useRef(0);
@@ -39,13 +40,14 @@ export default function useMicrophone({ ws, enabled }: UseMicrophoneOptions) {
       streamRef.current = null;
     }
     setStatus("idle");
+    setError(null);
     bytesSentRef.current = 0;
     chunkCountRef.current = 0;
   }, []);
 
   const start = useCallback(async () => {
-    if (!enabled) return;
     setStatus("requesting");
+    setError(null);
 
     // Check MediaRecorder support
     if (
@@ -54,6 +56,7 @@ export default function useMicrophone({ ws, enabled }: UseMicrophoneOptions) {
         !MediaRecorder.isTypeSupported(PREFERRED_MIME))
     ) {
       setStatus("unsupported");
+      setError({ message: "MediaRecorder with WebM/Opus not supported in this browser." });
       return;
     }
 
@@ -79,10 +82,17 @@ export default function useMicrophone({ ws, enabled }: UseMicrophoneOptions) {
       };
 
       recorder.start(CHUNK_MS);
-    } catch {
+    } catch (err) {
       setStatus("error");
+      if (err instanceof DOMException && err.name === "NotAllowedError") {
+        setError({ message: "Microphone permission denied. Allow mic access or use text input." });
+      } else if (err instanceof DOMException && err.name === "NotFoundError") {
+        setError({ message: "No microphone found. Connect a mic or use text input." });
+      } else {
+        setError({ message: err instanceof Error ? err.message : "Failed to start microphone." });
+      }
     }
-  }, [enabled]);
+  }, []);
 
   // Keep a ref to the latest ws so the recorder closure sees the current value
   const wsRef = useRef(ws);
@@ -102,5 +112,5 @@ export default function useMicrophone({ ws, enabled }: UseMicrophoneOptions) {
     }
   }, [ws, status, stop]);
 
-  return { status, start, stop, bytesSent: bytesSentRef.current, chunkCount: chunkCountRef.current };
+  return { status, start, stop, error, bytesSent: bytesSentRef.current, chunkCount: chunkCountRef.current };
 }
